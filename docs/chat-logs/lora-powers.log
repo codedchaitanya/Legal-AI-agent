@@ -1,0 +1,164 @@
+ Also — quickly on the Indian legal domain segregation you asked for, here's how I'd split the LoRA adapters:
+
+  ┌──────────────────────┬─────────────────────────────────────────────────────────────────────────┐
+  │       Adapter        │                              Laws Covered                               │
+  ├──────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Criminal             │ BNS, BNSS, BSA (new IPC/CrPC/Evidence Act)                              │
+  ├──────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Civil Procedure      │ CPC, Limitation Act, Specific Relief Act                                │
+  ├──────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Constitutional       │ Constitution, Fundamental Rights, Amendment jurisprudence               │
+  ├──────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Corporate/Commercial │ Companies Act, Contract Act, NI Act, SEBI                               │
+  ├──────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Family/Personal      │ Hindu Marriage Act, Muslim Personal Law, Succession Acts, POCSO, DV Act │
+  ├──────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Property/Real Estate │ TPA, Registration Act, RERA, Land Acquisition                           │
+  ├──────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Labour               │ Industrial Disputes Act, 4 Labour Codes, Factories Act                  │
+  ├──────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Tax                  │ Income Tax Act, GST, Customs                                            │
+  ├──────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ IP                   │ Patents, Copyright, Trademarks                                          │
+  ├──────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Banking/Insolvency   │ RBI Act, SARFAESI, IBC                                                  │
+  ├──────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Cyber/Data           │ IT Act 2000, DPDP Act 2023                                              │
+  └──────────────────────┴─────────────────────────────────────────────────────────────────────────┘
+
+  A single case can activate multiple adapters (e.g., a corporate fraud case needs Criminal + Corporate + Banking). The router handles
+   multi-label classification, not just single-class.
+
+
+can lora do this much fine tuning ?                                                                                                 
+                                                                                                                                      
+⏺ Great question — this is the most important technical clarification in the whole design. Honest answer: LoRA alone cannot do this.  
+  But LoRA + PageIndex together can, because they split the job.                                                                      
+                                                                                                                                      
+  Here's the key insight most people miss:                                                                                            
+                                                                                                                                      
+  ---                                       
+  What LoRA Actually Does (and Doesn't Do)
+                                                                                                                                      
+  LoRA injects small trainable matrices into the attention layers (~0.1–0.5% of total parameters). It adapts behaviour, it does not   
+  store knowledge.                                                                                                                    
+                                                                                                                                      
+  ┌───────────────────────────────────────────────────────────────────────┬───────────────────────────────────────────────────────┐   
+  │                         What LoRA CAN do well                         │               What LoRA CANNOT do well                │
+  ├───────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────┤   
+  │ Legal reasoning style and structure                                   │ Memorising 50,000 legal sections                      │   
+  ├───────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────┤   
+  │ Understanding legal terminology (mens rea, locus standi, cognizable   │ Knowing exact BNS section numbers reliably            │   
+  │ offence)                                                              │                                                       │   
+  ├───────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────┤   
+  │ Formatting outputs as legal arguments / citations                     │ Recalling specific case judgments accurately          │   
+  ├───────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────┤   
+  │ Interpreting a lawyer's query in legal context                        │ Cross-referencing "See Appendix G" or "Refer Section  │   
+  │                                                                       │ 302"                                                  │   
+  ├───────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────┤   
+  │ Classifying case domain (router)                                      │ Keeping up with law amendments post-training          │   
+  ├───────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────┤   
+  │ Argument writing style                                                │ Injecting large entirely new factual knowledge        │   
+  └───────────────────────────────────────────────────────────────────────┴───────────────────────────────────────────────────────┘   
+                                                                                                                                      
+  The fundamental limit: LoRA with rank r=64 on a 7B model adds roughly 20–40MB of new weights. You cannot fit Indian legal knowledge 
+  into 40MB. If you try, the model will confidently hallucinate section numbers, case names, and judgments — the worst possible       
+  failure mode for a legal tool.                                                                                                      
+                                                                                                                                      
+  ---                                                                                                                                 
+  How the Design Splits the Responsibility Correctly                                                                                  
+                                                                                                                                      
+  This is why the pipeline is designed the way it is:                                                                                 
+                                                                                                                                      
+  LoRA = Legal Intelligence       PageIndex = Legal Knowledge                                                                         
+  ─────────────────────────       ─────────────────────────                                                                           
+  How to think legally            What the law actually says                                                                      
+  How to write arguments          Exact BNS/BNSS section text                                                                         
+  How to structure legal Q&A      Real case judgment content                                                                          
+  Understand "what is mens rea"   Find which sections apply to this case                                                              
+  Classify criminal vs civil      Retrieve Section 103 BNS verbatim                                                                   
+  Argument writing style          Cross-reference "See Appendix G"                                                                    
+                                                                                                                                      
+  Neither works alone:                                                                                                                
+  - LoRA without PageIndex = smart legal writer who hallucinated their bar exam                                                       
+  - PageIndex without LoRA = dumb retriever that finds text but can't reason about it like a lawyer                                   
+                                                                                                                                      
+  Together: PageIndex fetches ground truth, LoRA knows what to do with it.                                                            
+                                                                                                                                      
+  ---                                                                                                                                 
+  Specific Concerns About This Pipeline                                                                                               
+                                                                                                                                      
+  1. Multi-adapter composition (set_adapter(["criminal", "constitutional"]))                                                          
+                                                                                                                                      
+  This works but degrades slightly when adapters are trained on overlapping or conflicting data. Research shows ~3-8% accuracy drop vs
+   single adapter. Mitigation: train adapters on clean, non-overlapping domain data. Criminal + Argument-gen works great              
+  (complementary tasks). Criminal + Civil might interfere.                                                                            
+                                                                                                                                      
+  Recommendation: Test single adapter vs composed adapters on InLegalBench. If composition degrades > 5%, use a single "merged"       
+  adapter for common combinations instead.                                                                                            
+                                                                                                                                      
+  2. BNS/BNSS Knowledge Gap                                                                                                           
+                                                                                                                                      
+  Qwen2.5-7B's training cutoff is late 2024. BNS/BNSS/BSA were passed in 2023 and operationalised in 2024 — they may be partially in  
+  the base model's training data. But exact section numbers, wording, and cross-references should NEVER be trusted from LoRA memory   
+  alone. PageIndex is the ground truth for all section content. LoRA just helps the model understand the domain.                      
+                                                                                                                                      
+  3. Dataset Size (1,500–5,000 pairs)                                                                                                 
+                                                                                                                                      
+  For knowledge memorisation — too small.                                                                                             
+  For behaviour adaptation — sufficient.                                                                                              
+                                                                                                                                      
+  Since we're using LoRA for behaviour (not knowledge), 3,000–5,000 good quality pairs per domain is actually enough. Quality matters 
+  far more than quantity here. 500 expert-reviewed pairs beat 5,000 noisy scraped ones.                                               
+                                                                                                                                  
+  4. Argument Generation Specifically                                                                                                 
+                                                                                                                                      
+  This is where LoRA's limits show most. A 7B model with LoRA will not generate courtroom-quality arguments from scratch. This is why 
+  the design routes argument generation to the big model API (GPT-4.1/Claude) — the LoRA small model only prepares the structured     
+  legal brief (Stage 1). The big model does the actual argument writing (Stage 2).                                                    
+                                                                                                                                      
+  The lora-argument-gen adapter on the small model is about: formatting legal briefs correctly, knowing what a "structured brief"     
+  looks like, extracting the right facts from case context. Not about writing the final argument.                                     
+                                                                                                                                      
+  ---                                                                                                                                 
+  Should You Use Anything Besides LoRA?                                                                                               
+                                                                                                                                      
+  For this pipeline, two additions worth considering:                                                                                 
+                                                                                                                                      
+  RAG-only baseline first (no LoRA): Before training any adapter, test PageIndex + base model + good system prompt. You might get     
+  70-80% of the quality at 0% of the training cost. LoRA then becomes an incremental improvement, not a foundation.                   
+                                                                                                                                      
+  Larger LoRA rank for argument adapter: Standard rank is r=8 to r=64. For the argument generation task adapter, go r=128 or r=256.
+  This is the one place where you need more capacity — legal writing style is complex.
+                                                                                                                                      
+  ---                                                                                                                                 
+  Bottom line for your pipeline:                                                                                                      
+                                                                                                                                      
+  The design is sound precisely because LoRA is not being asked to be the knowledge store. PageIndex carries the legal knowledge. LoRA
+   carries the legal intelligence. The only adjustment I'd recommend: test zero-shot (no LoRA) first so you know what you're actually 
+  gaining from the fine-tuning effort before committing 6 weeks of data prep.                                                         
+                                                                                                                                      
+  Want me to add this LoRA capability analysis as a section to the spec before we move to the implementation plan?  
+
+  Here's a summary of what Section 8 now covers with full technical depth:
+                                                          
+  ┌───────────────────────────────────┬───────────────────────────────────────────────────────────────────────────────────────────┐
+  │            Sub-section            │                                      What it answers                                      │
+  ├───────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+  │ 8.1 Intelligence vs Knowledge     │ Why LoRA + PageIndex works, why either alone fails                                        │   
+  │ split                             │                                                                                           │   
+  ├───────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────┤   
+  │ 8.2 Hyperparameter trade-offs     │ Rank per adapter type (r=32 for domain, r=128 for argument-gen), alpha, dropout, target   │   
+  │                                   │ modules                                                                                   │   
+  ├───────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────┤   
+  │ 8.3 Multi-adapter composition     │ Interference quantified (~3-8% drop), 3 mitigation options with when to use each          │   
+  ├───────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────┤   
+  │ 8.4 PEFT method comparison        │ QLoRA vs full FT vs IA³ vs prefix tuning — why QLoRA wins for this setup                  │   
+  ├───────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────┤   
+  │ 8.5 Base model selection          │ Qwen vs Llama vs Mistral trade-offs, why Qwen is likely winner                            │   
+  ├───────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────┤   
+  │ 8.6 Baseline-first strategy       │ Measure zero-shot before committing to training. Decision rule with thresholds            │   
+  ├───────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────┤   
+  │ 8.7 BNS/BNSS knowledge gap        │ Why model memory is never trusted for statutory text, hallucination mitigation            │   
+  └───────────────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────┘   
+                                                                                                                                      

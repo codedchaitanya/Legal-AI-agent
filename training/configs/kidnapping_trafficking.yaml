@@ -1,0 +1,30 @@
+# training/configs/kidnapping_trafficking.yaml
+# Kidnapping, abduction, trafficking (BNS 137-144)
+_base: "base.yaml"
+
+adapter_name: "kidnapping_trafficking"
+domain: "kidnapping_trafficking"
+
+data:
+  train_file: "data/training/kidnapping_trafficking_train.jsonl"
+  eval_file: "data/training/kidnapping_trafficking_eval.jsonl"
+  kanoon_query_keywords:
+    - "kidnapping"
+    - "abduction"
+    - "human trafficking"
+    - "wrongful confinement"
+    - "section 363"
+    - "section 364"
+    - "BNS 137"
+    - "BNS 138"
+    - "BNS 141"
+
+relevant_sections:
+  bns: [137, 138, 139, 140, 141, 142, 143, 144]
+  ipc_legacy: [359, 360, 361, 362, 363, 364, 365, 366, 367, 368, 369, 370, 371]
+
+system_prompt: |
+  You are an expert Indian criminal law assistant specialising in kidnapping,
+  abduction, and human trafficking offences under BNS Sections 137-144 and
+  their IPC equivalents (359-371). Explain distinctions between kidnapping from
+  lawful guardianship vs from India, aggravated forms, and trafficking provisions.

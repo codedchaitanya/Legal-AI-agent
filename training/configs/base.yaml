@@ -1,0 +1,56 @@
+# training/configs/base.yaml
+# Shared QLoRA training configuration for all domain adapters.
+# Domain-specific YAMLs override only what differs.
+
+# Base model
+base_model_id: "Qwen/Qwen2.5-7B-Instruct"
+
+# QLoRA configuration
+lora:
+  r: 32
+  lora_alpha: 64
+  lora_dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+  bias: "none"
+  task_type: "CAUSAL_LM"
+
+# Quantization (4-bit for Colab T4/A100)
+quantization:
+  load_in_4bit: true
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_use_double_quant: true
+
+# Training hyperparameters
+training:
+  num_train_epochs: 3
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  lr_scheduler_type: "cosine"
+  max_seq_length: 2048
+  logging_steps: 10
+  save_steps: 100
+  eval_steps: 100
+  save_total_limit: 2
+  bf16: true
+  gradient_checkpointing: true
+  optim: "paged_adamw_8bit"
+  report_to: "none"
+
+# Data
+data:
+  max_samples: null  # null = use all
+  train_split: 0.9
+  seed: 42
+
+# SFT-specific
+sft:
+  packing: false
+  dataset_text_field: "text"

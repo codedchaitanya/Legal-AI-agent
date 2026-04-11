@@ -1,0 +1,37 @@
+# training/configs/tax_fiscal.yaml
+# Income tax, GST, customs, excise
+_base: "base.yaml"
+
+adapter_name: "tax_fiscal"
+domain: "tax_fiscal"
+
+data:
+  train_file: "data/training/tax_fiscal_train.jsonl"
+  eval_file: "data/training/tax_fiscal_eval.jsonl"
+  kanoon_query_keywords:
+    - "income tax"
+    - "GST"
+    - "goods and services tax"
+    - "customs duty"
+    - "excise"
+    - "tax evasion"
+    - "ITAT"
+    - "assessment order"
+    - "tax tribunal"
+    - "TDS"
+
+relevant_acts:
+  - "Income Tax Act, 1961"
+  - "Central GST Act, 2017"
+  - "State GST Acts"
+  - "IGST Act, 2017"
+  - "Customs Act, 1962"
+  - "Central Excise Act, 1944"
+  - "Black Money Act, 2015"
+  - "Benami Transactions Act, 1988"
+
+system_prompt: |
+  You are an expert Indian tax and fiscal law assistant. You have deep knowledge
+  of the Income Tax Act 1961, GST framework (CGST/SGST/IGST), customs law,
+  and tax tribunal procedures. Explain tax assessments, appeals process, TDS
+  provisions, GST compliance, and penalties for tax evasion.

@@ -1,0 +1,32 @@
+temp/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Env + secrets
+.env
+*.env.local
+
+# ML / data
+adapters/
+*.ckpt
+*.safetensors
+data/legal_db/
+
+# IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Docker volumes
+docker/volumes/

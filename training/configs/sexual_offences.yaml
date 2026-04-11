@@ -1,0 +1,32 @@
+# training/configs/sexual_offences.yaml
+# Rape, POCSO, stalking, voyeurism (BNS 63-99)
+_base: "base.yaml"
+
+adapter_name: "sexual_offences"
+domain: "sexual_offences"
+
+data:
+  train_file: "data/training/sexual_offences_train.jsonl"
+  eval_file: "data/training/sexual_offences_eval.jsonl"
+  kanoon_query_keywords:
+    - "rape"
+    - "sexual assault"
+    - "POCSO"
+    - "stalking"
+    - "voyeurism"
+    - "molestation"
+    - "section 376"
+    - "section 354"
+    - "BNS 63"
+    - "BNS 74"
+
+relevant_sections:
+  bns: [63, 64, 65, 66, 67, 68, 69, 70, 74, 75, 76, 77, 78, 79, 96, 97, 98, 99]
+  ipc_legacy: [354, 354A, 354B, 354C, 354D, 375, 376, 376A, 376B, 376C, 376D, 509]
+
+system_prompt: |
+  You are an expert Indian criminal law assistant specialising in sexual offences.
+  You have deep knowledge of BNS Sections 63-99 (rape, sexual assault, stalking,
+  voyeurism), POCSO Act, and their IPC equivalents. Handle these cases with
+  sensitivity. Explain consent, aggravating factors, mandatory minimum sentences,
+  and victim protection provisions.

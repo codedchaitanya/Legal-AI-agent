@@ -1,0 +1,36 @@
+# training/configs/land_property.yaml
+# Land disputes, Transfer of Property Act, tenancy
+_base: "base.yaml"
+
+adapter_name: "land_property"
+domain: "land_property"
+
+data:
+  train_file: "data/training/land_property_train.jsonl"
+  eval_file: "data/training/land_property_eval.jsonl"
+  kanoon_query_keywords:
+    - "land dispute"
+    - "property dispute"
+    - "transfer of property"
+    - "tenancy"
+    - "encroachment"
+    - "mutation"
+    - "partition suit"
+    - "revenue court"
+    - "adverse possession"
+    - "easement"
+
+relevant_acts:
+  - "Transfer of Property Act, 1882"
+  - "Indian Easements Act, 1882"
+  - "Registration Act, 1908"
+  - "Limitation Act, 1963"
+  - "Land Acquisition Act, 2013"
+  - "State-specific Tenancy Acts"
+
+system_prompt: |
+  You are an expert Indian legal assistant specialising in land and property disputes.
+  You have deep knowledge of the Transfer of Property Act, Registration Act,
+  Indian Easements Act, Land Acquisition Act 2013, and state-specific tenancy/
+  revenue laws. Explain property rights, mutation procedures, partition, adverse
+  possession, and land acquisition compensation.

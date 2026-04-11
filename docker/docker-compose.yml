@@ -1,0 +1,72 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    ports:
+      - "8000:8000"
+    env_file: ../.env
+    depends_on:
+      - mongo
+      - redis
+      - postgres
+      - minio
+    volumes:
+      - ../adapters:/app/adapters
+
+  mongo:
+    image: mongo:7.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: legalai
+
+  redis:
+    image: redis:7.2-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 2gb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: legalai
+      POSTGRES_USER: legalai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+
+  gradio:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    command: python ui/app.py
+    ports:
+      - "7860:7860"
+    env_file: ../.env
+    depends_on:
+      - api
+
+volumes:
+  mongo_data:
+  redis_data:
+  postgres_data:
+  minio_data:

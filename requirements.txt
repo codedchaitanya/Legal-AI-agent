@@ -1,0 +1,60 @@
+# Indian Legal AI Pipeline — merged dependencies
+# Core API + local summarisation + LoRA adapters + training
+
+# ── API framework ───────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+gradio>=5.0.0
+pydantic>=2.9.0
+pydantic-settings>=2.5.0
+
+# ── LLM APIs (fallback / routing) ──────────────────────────
+anthropic>=0.40.0
+
+# ── Deep learning core ─────────────────────────────────────
+torch>=2.4.0
+transformers>=4.46.0
+peft>=0.13.0
+trl>=0.11.0
+accelerate>=0.34.0
+bitsandbytes>=0.42.0
+sentencepiece>=0.2.0
+
+# ── Local summarisation pipeline (Legal-BERT + PEGASUS) ────
+nltk>=3.8.1
+scikit-learn>=1.3.0
+
+# ── OCR pipeline (GLM-OCR) ─────────────────────────────────
+pillow>=10.0.0
+pymupdf>=1.23.0
+pdf2image>=1.16.0
+pypdf>=4.0.0
+
+# ── Databases ──────────────────────────────────────────────
+motor>=3.5.0
+redis[hiredis]>=5.1.0
+sqlalchemy[asyncio]>=2.0.35
+asyncpg>=0.29.0
+alembic>=1.13.0
+minio>=7.2.9
+
+# ── Scraping & data prep ──────────────────────────────────
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+pyyaml>=6.0
+
+# ── Utilities ──────────────────────────────────────────────
+httpx>=0.27.0
+python-multipart>=0.0.12
+python-dotenv>=1.0.0
+tenacity>=9.0.0
+structlog>=24.0.0
+datasets>=2.18.0
+
+# ── Testing ────────────────────────────────────────────────
+pytest>=8.3.0
+pytest-asyncio>=0.24.0
+pytest-mock>=3.14.0
+
+# ── Optional: spaCy NER (Python 3.10–3.12) ────────────────
+# pip install spacy && python -m spacy download en_core_web_sm

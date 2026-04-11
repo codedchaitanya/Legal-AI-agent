@@ -1,0 +1,344 @@
+Let me walk through the full design section by section. Tell me after each if it looks right.
+
+  ---
+  Section 1 — Full Pipeline Architecture
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │                     INGESTION LAYER                         │
+  │  Client Docs (FIR/contract/affidavit/chargesheet)           │
+  │       ↓                                                     │
+  │  [Extractive Summarizer] ──────────────────────────────┐    │
+  │       ↓ extractive summary + keywords + section refs   │    │
+  │  [Domain Router / Multi-label Classifier]              │    │
+  │       ↓ top-K domain labels + confidence scores        │    │
+  │  [PageIndex Builder — Client]  ←────────────────────── ┘    │
+  │       ↓ hierarchical ToC tree per case_id (cached)          │
+  └──────────────────────┬──────────────────────────────────────┘
+                         │
+  ┌──────────────────────▼──────────────────────────────────────┐
+  │                  RETRIEVAL LAYER                             │
+  │                                                             │
+  │  PageIndex — Client Docs        PageIndex — Legal DB        │
+  │  (per-case, built on upload)    (pre-computed, static)      │
+  │  FIR pages, contracts, etc.     BNS, BNSS, Constitution,    │
+  │                                 HC/SC judgments, etc.       │
+  │              ↓                           ↓                  │
+  │         Merged context window (relevant pages from both)    │
+  └──────────────────────┬──────────────────────────────────────┘
+                         │
+  ┌──────────────────────▼──────────────────────────────────────┐
+  │                 REASONING LAYER                              │
+  │                                                             │
+  │  Base LLM (Qwen2.5-7B / Llama-3.1-8B)                      │
+  │       + active LoRA adapter(s) selected by router           │
+  │       + conversation history in context                     │
+  │                                                             │
+  │  ──── Case Research / Doc Q&A ────                          │
+  │  Answer generated here, grounded in PageIndex context       │
+  │                                                             │
+  │  ──── Argument Generation (CoT + Agentic Big Model) ────    │
+  │  Big Model API (GPT-4.1 / Claude) with:                     │
+  │    - tool: fetch_legal_db(node_id)                          │
+  │    - tool: fetch_case_docs(doc_id, page)                    │
+  │    - tool: resolve_cross_ref(citation)                      │
+  │    - tool: search_precedents(query)                         │
+  │  CoT chain: facts → legal basis → precedents → argument     │
+  │                                                             │
+  └──────────────────────┬──────────────────────────────────────┘
+                         │
+  ┌──────────────────────▼──────────────────────────────────────┐
+  │                  CRITIC LAYER (argument mode only)          │
+  │                                                             │
+  │  Generates top-K arguments (K=3-5)                          │
+  │  Critic model scores each on:                               │
+  │    - Legal accuracy (sections cited are real + correct)     │
+  │    - Logical coherence (premise → conclusion holds)         │
+  │    - Evidence grounding (every claim has a retrieved source)│
+  │    - Case relevance                                         │
+  │  Weighted score → filter by threshold → return best         │
+  └──────────────────────┬──────────────────────────────────────┘
+                         │
+  ┌──────────────────────▼──────────────────────────────────────┐
+  │               INTERFACE LAYER                               │
+  │  FastAPI backend  +  Gradio frontend                        │
+  │  Conversation history maintained per session/case_id        │
+  └─────────────────────────────────────────────────────────────┘
+
+  Does this high-level flow look right? Any component missing?
+
+  ---
+  Section 2 — The Two PageIndex Instances
+
+  Legal DB PageIndex — Pre-computed, Static
+
+  Built once offline. Updated only when laws are amended.
+
+  Structure per node:
+  {
+    "node_id": "BNS-103",
+    "title": "Section 103 — Murder",
+    "act": "Bharatiya Nyaya Sanhita 2023",
+    "section_number": "103",
+    "old_equivalent": "IPC Section 302",
+    "summary": "Whoever commits murder shall be punished with death or imprisonment for life...",
+    "keywords": ["murder", "culpable homicide", "death penalty"],
+    "sub_nodes": [...],
+    "page_range": [88, 89]
+  }
+
+  The old_equivalent field is critical — lawyers still think in IPC numbers, the system silently maps BNS/BNSS.
+
+  Pre-computation strategy:
+  - Parse all bare acts (BNS, BNSS, BSA, Constitution, etc.) as PDFs/text
+  - For each section, generate a 2-3 sentence LLM summary (one-time cost)
+  - Build the tree bottom-up: sections → chapters → acts → full DB
+  - Store as JSON + MongoDB for fast node_id lookups
+  - Estimated size: ~50,000 nodes across all 11 domains
+  - One-time compute: ~4-6 hours with GPT-4.1 for summaries, then static forever
+
+  Client Docs PageIndex — Per-case, Dynamic
+
+  Built when a case is created/documents uploaded. Cached by case_id.
+
+  {
+    "case_id": "CASE-2024-001",
+    "document": "FIR_dated_2024-03-15.pdf",
+    "doc_type": "FIR",
+    "node_id": "CASE-2024-001-FIR-P3",
+    "title": "FIR Page 3 — Statement of Complainant",
+    "summary": "Complainant states accused entered premises at 11pm...",
+    "page": 3,
+    "sub_nodes": [...]
+  }
+
+  Built on upload → cached → reused for every query in that case session.
+
+  ---
+  Section 3 — Summarizer + Router (What They Actually Do)
+
+  These two work as a pipeline gate before anything expensive runs:
+
+  Raw Client Doc
+        ↓
+  [Summarizer] — model: BERT-based or LLM with prompt
+        ↓ outputs:
+        ├── Extractive summary (top sentences, not paraphrased)
+        ├── Entities: names, dates, locations, amounts
+        ├── Legal sections mentioned ("Section 420 IPC" → maps to BNS 318)
+        └── Doc type: FIR / contract / affidavit / judgment
+
+        ↓ all above feeds into ↓
+
+  [Router / Multi-label Classifier]
+        ↓ outputs:
+        ├── Domain labels: ["criminal", "constitutional"] with confidence
+        ├── Primary domain (highest confidence) → main adapter
+        └── Secondary domains → supporting adapters (if confidence > 0.4)
+
+  Router implementation options (pick based on your timeline):
+
+  ┌────────────────────────────────────┬────────────┬──────────┬───────────────┐
+  │               Option               │ Complexity │ Accuracy │     Speed     │
+  ├────────────────────────────────────┼────────────┼──────────┼───────────────┤
+  │ Rule-based (keyword matching)      │ Low        │ ~70%     │ Instant       │
+  ├────────────────────────────────────┼────────────┼──────────┼───────────────┤
+  │ Zero-shot big model classification │ Low        │ ~85%     │ 1-2s API call │
+  ├────────────────────────────────────┼────────────┼──────────┼───────────────┤
+  │ Fine-tuned BERT classifier         │ Medium     │ ~92%     │ 50ms local    │
+  ├────────────────────────────────────┼────────────┼──────────┼───────────────┤
+  │ Fine-tuned on InLegalBERT          │ High       │ ~95%     │ 50ms local    │
+  └────────────────────────────────────┴────────────┴──────────┴───────────────┘
+
+  Recommendation: Start with zero-shot big model classification (ship fast), replace with fine-tuned BERT once you have labelled data
+  from real usage.
+
+  ---
+  Section 4 — LoRA Adapters: Training, Time & PEFT Usage
+
+  Training time estimate at 2 hrs/adapter:
+
+  ┌─────────────────────────┬─────────────────────┬───────────────┬────────────────────────────────┐
+  │         Adapter         │ Dataset size needed │ Training time │          Data source           │
+  ├─────────────────────────┼─────────────────────┼───────────────┼────────────────────────────────┤
+  │ Criminal (BNS/BNSS/BSA) │ 5,000 Q&A pairs     │ 2 hrs         │ Indian Kanoon, SC/HC judgments │
+  ├─────────────────────────┼─────────────────────┼───────────────┼────────────────────────────────┤
+  │ Constitutional          │ 3,000 pairs         │ 2 hrs         │ Constitution, landmark cases   │
+  ├─────────────────────────┼─────────────────────┼───────────────┼────────────────────────────────┤
+  │ Civil Procedure         │ 3,000 pairs         │ 2 hrs         │ CPC cases, HC orders           │
+  ├─────────────────────────┼─────────────────────┼───────────────┼────────────────────────────────┤
+  │ Corporate/Commercial    │ 4,000 pairs         │ 2 hrs         │ Company law cases, contracts   │
+  ├─────────────────────────┼─────────────────────┼───────────────┼────────────────────────────────┤
+  │ Family/Personal         │ 3,000 pairs         │ 2 hrs         │ Family court judgments         │
+  ├─────────────────────────┼─────────────────────┼───────────────┼────────────────────────────────┤
+  │ Property/Real Estate    │ 2,500 pairs         │ 2 hrs         │ RERA, land cases               │
+  ├─────────────────────────┼─────────────────────┼───────────────┼────────────────────────────────┤
+  │ Labour                  │ 2,000 pairs         │ 2 hrs         │ Labour tribunal orders         │
+  ├─────────────────────────┼─────────────────────┼───────────────┼────────────────────────────────┤
+  │ Tax                     │ 3,000 pairs         │ 2 hrs         │ ITAT, GST tribunal             │
+  ├─────────────────────────┼─────────────────────┼───────────────┼────────────────────────────────┤
+  │ IP                      │ 1,500 pairs         │ 2 hrs         │ Patent/trademark rulings       │
+  ├─────────────────────────┼─────────────────────┼───────────────┼────────────────────────────────┤
+  │ Banking/IBC             │ 2,500 pairs         │ 2 hrs         │ NCLT/DRT judgments             │
+  ├─────────────────────────┼─────────────────────┼───────────────┼────────────────────────────────┤
+  │ Cyber/Data              │ 1,500 pairs         │ 2 hrs         │ IT Act cases, DPDP             │
+  ├─────────────────────────┼─────────────────────┼───────────────┼────────────────────────────────┤
+  │ Argument Generation     │ 3,000 legal briefs  │ 3 hrs         │ Written arguments, pleadings   │
+  ├─────────────────────────┼─────────────────────┼───────────────┼────────────────────────────────┤
+  │ Critic/Reward Model     │ 2,000 scored pairs  │ 4 hrs         │ Human-rated arguments          │
+  └─────────────────────────┴─────────────────────┴───────────────┴────────────────────────────────┘
+
+  Total compute: ~29 hours
+  - With 4 GPUs in parallel: ~8-10 hrs wall clock
+  - Data preparation: 3-6 weeks (this is the bottleneck, not training)
+  - IIT Patna model slots in immediately as your Criminal adapter baseline
+
+  How PEFT handles multiple active adapters:
+  # Load base model once
+  base = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
+
+  # Load all adapters at startup (they're small, ~50-200MB each)
+  model = PeftModel.from_pretrained(base, "adapters/criminal", adapter_name="criminal")
+  model.load_adapter("adapters/constitutional", adapter_name="constitutional")
+  model.load_adapter("adapters/argument_gen", adapter_name="argument")
+
+  # At query time — router says ["criminal", "constitutional"]
+  model.set_adapter(["criminal", "constitutional"])  # both active simultaneously
+  response = model.generate(...)
+
+  # For argument generation — switch adapter
+  model.set_adapter(["criminal", "argument"])
+
+  PEFT's set_adapter() lets you compose adapters at inference time with zero reloading cost. This is the MoE mechanism — same base
+  weights, different LoRA layers activate.
+
+  ---
+  Section 5 — Argument Generation: CoT + Agentic Big Model + PEFT
+
+  The argument pipeline is a two-stage process:
+
+  Stage 1 — Domain LoRA gathers legal basis (small model):
+  Case facts + retrieved PageIndex context
+         ↓
+  Small model + Criminal/domain LoRA
+         ↓
+  "Structured legal brief": applicable sections, relevant precedents, key facts
+
+  Stage 2 — Big Model generates arguments with CoT + tools:
+  System: You are a senior Indian advocate. Reason step by step.
+
+  Step 1 — Facts: [structured brief from Stage 1]
+  Step 2 — Legal Basis: What sections apply?
+           → tool: fetch_legal_db("BNS-103") if needs to verify
+  Step 3 — Precedents: Find similar judgments
+           → tool: search_precedents("murder self-defence acquittal")
+  Step 4 — Argument construction: Build the chain
+  Step 5 — Anticipate counter-arguments
+  Step 6 — Final argument statement
+
+  [If at any step model says "I need to check X" → tool call fires →
+   fetches from PageIndex → continues CoT with new grounding]
+
+  The agentic loop: model can go back mid-CoT if it needs to cross-reference. No limit on tool calls until CoT concludes.
+
+  Generates K=3-5 argument variations → all sent to Critic.
+
+  ---
+  Section 6 — Critic Model + Scoring
+
+  Argument → Critic scores on 4 dimensions:
+
+  1. Legal Accuracy (0-1):    Are cited sections real? Correctly interpreted?
+  2. Logical Coherence (0-1): Does premise → conclusion hold?
+  3. Evidence Grounding (0-1): Every claim has a PageIndex source?
+  4. Case Relevance (0-1):    Does it address the actual case facts?
+
+  Weighted score = 0.35×accuracy + 0.25×coherence + 0.25×grounding + 0.15×relevance
+
+  Threshold = 0.72 (tunable)
+  Top-K filter: keep arguments where score > threshold, return highest scoring
+
+  Critic model options:
+
+  ┌─────────────────────────────────────────────────────────┬──────────────┬───────────────────────┐
+  │                         Option                          │ Build effort │        Quality        │
+  ├─────────────────────────────────────────────────────────┼──────────────┼───────────────────────┤
+  │ Big model as judge (GPT-4.1 with rubric prompt)         │ 1 day        │ Good, expensive       │
+  ├─────────────────────────────────────────────────────────┼──────────────┼───────────────────────┤
+  │ Fine-tuned reward model (PEFT on human ratings)         │ 3-4 weeks    │ Best, cheap inference │
+  ├─────────────────────────────────────────────────────────┼──────────────┼───────────────────────┤
+  │ Hybrid: small model fast filter → big model final check │ 1 week       │ Balanced              │
+  └─────────────────────────────────────────────────────────┴──────────────┴───────────────────────┘
+
+  Recommendation: Start with big model as judge (fast to ship), collect human ratings from lawyers using the app, use those to train
+  the reward model later.
+
+  ---
+  Section 7 — Quantitative Benchmarks Per Stage
+
+  ┌───────────────┬───────────────────────────────────────┬───────────────────────┐
+  │   Component   │          Benchmark / Metric           │        Target         │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ Summarizer    │ ROUGE-L vs human summary              │ > 0.45                │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ Summarizer    │ Section extraction F1                 │ > 0.88                │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ Router        │ Multi-label F1 per domain             │ > 0.85                │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ Router        │ Top-1 accuracy                        │ > 0.90                │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ LoRA Adapters │ InLegalBench accuracy                 │ > 65% (baseline: 45%) │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ LoRA Adapters │ LegalBench ISSUE subset               │ > 60%                 │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ LoRA Adapters │ BERTScore on Q&A                      │ > 0.82                │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ Case Research │ Recall@3 (right case in top 3)        │ > 0.75                │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ Case Research │ MRR (mean reciprocal rank)            │ > 0.70                │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ Case Research │ NDCG@5                                │ > 0.72                │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ Argument Gen  │ Legal coherence (human 1-5)           │ > 3.8 avg             │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ Argument Gen  │ BERTScore vs expert arguments         │ > 0.80                │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ Critic Model  │ Pearson correlation with human rating │ > 0.78                │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ Critic Model  │ Precision of "good argument" filter   │ > 0.85                │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ Full Pipeline │ End-to-end InLegalBench               │ > 60%                 │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ Full Pipeline │ Latency (case research query)         │ < 5 seconds           │
+  ├───────────────┼───────────────────────────────────────┼───────────────────────┤
+  │ Full Pipeline │ API cost per argument generation      │ < $0.08               │
+  └───────────────┴───────────────────────────────────────┴───────────────────────┘
+
+  Datasets to use:
+  - InLegalBench — Indian legal Q&A benchmark (primary)
+  - LegalBench — general legal reasoning (secondary)
+  - ILDC (Indian Legal Document Corpus) — for summarizer training/eval
+  - CUAD — contract understanding (for commercial adapter)
+  - Your own eval set — 100 expert-verified Q&A pairs per domain (build as you go)
+
+  ---
+  Section 8 — IIT Patna Qwen Model Assessment
+
+  Use it? Yes, as a starting baseline only.
+
+  ┌────────────────────────────────────────┬─────────────────────────────────────────────────┐
+  │              What's good               │                   What's weak                   │
+  ├────────────────────────────────────────┼─────────────────────────────────────────────────┤
+  │ QLoRA on Qwen2.5-7B — right approach   │ Only 1,500 training pairs (too small)           │
+  ├────────────────────────────────────────┼─────────────────────────────────────────────────┤
+  │ MIT license — commercial use OK        │ Evaluated only by training loss — no benchmarks │
+  ├────────────────────────────────────────┼─────────────────────────────────────────────────┤
+  │ Available now — validate pipeline fast │ Covers IPC, not BNS/BNSS (outdated sections)    │
+  ├────────────────────────────────────────┼─────────────────────────────────────────────────┤
+  │ Same PEFT framework you'll use         │ No BSA, no cross-reference training             │
+  └────────────────────────────────────────┴─────────────────────────────────────────────────┘
+
+  Plan: Load it as criminal_v0 adapter. Run InLegalBench against it. Use its score as your baseline. Your trained adapters must beat
+  it to justify the training effort.
+
+  ---
+  Does this design look right to you? Anything to adjust before I write it as a spec document and README?

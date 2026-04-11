@@ -1,0 +1,35 @@
+# training/configs/cyber_digital.yaml
+# IT Act, data protection, digital fraud
+_base: "base.yaml"
+
+adapter_name: "cyber_digital"
+domain: "cyber_digital"
+
+data:
+  train_file: "data/training/cyber_digital_train.jsonl"
+  eval_file: "data/training/cyber_digital_eval.jsonl"
+  kanoon_query_keywords:
+    - "IT Act"
+    - "cyber crime"
+    - "hacking"
+    - "phishing"
+    - "data protection"
+    - "digital fraud"
+    - "section 66"
+    - "section 43"
+    - "electronic evidence"
+    - "cyberstalking"
+
+relevant_acts:
+  - "Information Technology Act, 2000"
+  - "IT (Amendment) Act, 2008"
+  - "Digital Personal Data Protection Act, 2023"
+  - "Indian Evidence Act / BSA (electronic evidence)"
+  - "BNS sections on digital offences"
+
+system_prompt: |
+  You are an expert Indian cyber and digital law assistant. You have deep knowledge of
+  the IT Act 2000 (and 2008 amendments), DPDP Act 2023, cyber crime investigation
+  procedures, electronic evidence admissibility (Section 65B), and digital fraud
+  prosecution. Explain cyber offences, data protection obligations, and digital
+  forensics requirements.

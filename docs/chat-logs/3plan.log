@@ -1,0 +1,114 @@
+What kind of documents will the lawyer feed into the system?
+
+  - A) Only structured legal databases — IPC, CrPC, Constitution, published SC/HC judgments (clean PDFs, mostly text)
+  - B) Mostly scanned court documents — handwritten notes, physical filings, old case papers (images/photos, poor quality)
+  - C) A mix — some clean statutes/PDFs + some scanned physical documents + typed case briefs
+  - D) Primarily client-provided documents — contracts, FIRs, affidavits, charge sheets that they upload per case
+
+  What is the deployment environment for this system?
+
+  - A) Fully local / on-premise — all models run on the law firm's own servers (maximum data privacy, no client data leaves their
+  network — most law firms would demand this)
+  - B) Hybrid — legal databases + indexes on-prem, but use cloud LLM APIs (GPT-4.1, Claude) for generation and reasoning
+  - C) Cloud-hosted SaaS — everything runs on your infrastructure in the cloud, lawyers access via web app
+  - D) Not decided yet — still exploring
+
+  This is the single most important architectural decision because:
+  1. Indian law firms deal with extremely sensitive client data — FIRs, charge sheets, private contracts
+  2. It determines if the IIT Patna Qwen-7B QLoRA is even viable (7B on a T4 is fine locally, but you'd want something bigger for
+  argument generation)
+  3. It determines whether you need to self-train models or can rely on API-based LLMs + LoRA as a specialized layer
+
+Good — hybrid is the right call for now. One more focused question before I propose approaches:
+
+  Among these 3 capabilities, what's the MVP priority order?
+
+  - A) Document Q&A first — lawyer uploads case docs, asks "what does this FIR mean", "explain this charge sheet", "what are the weak
+  points in this contract" → get plain-language answers
+  - B) Case research first — lawyer describes a situation, system finds relevant precedents, applicable sections from
+  BNS/BNSS/Constitution, similar past judgments
+  - C) Argument generation first — given a case, system drafts structured arguments for a side, with CoT reasoning and critic scoring
+
+  The reason I ask: all three share the same foundation (ingestion + PageIndex + LoRA routing) but the critic model, CoT chain, and
+  argument scoring is significantly more complex to build and benchmark than Q&A. If you try to build all three at once you'll have
+  nothing working for months.
+
+  
+
+
+Here are 3 approaches. Each shares the same foundation but differs in where intelligence lives:
+
+  ---
+  Approach A — Big Model as Orchestrator (Agentic)
+
+  Client Docs → PageIndex → GPT-4.1 (orchestrator)
+                                 ↓ tool calls
+                      [fetch_legal_db] [fetch_client_index] [domain_expert_lora]
+                                 ↓
+                            Answer / Arguments
+
+  Big model (GPT-4.1/Claude) is the brain. LoRA adapters are tools it calls. PageIndex is a retrieval tool. The LLM decides what to
+  look up and when.
+
+  Pros: Fast to prototype, flexible, big model handles complex reasoning naturally, easy to add new tools
+  Cons: Expensive at scale, every query hits cloud API, hard to upgrade to on-prem, API latency stacks up per tool call
+
+  ---
+  Approach B — Router-First MoE Pipeline (Recommended)
+
+  Client Docs
+      ↓
+  [Extractive Summarizer] → keywords + case_type labels (multi-label)
+      ↓
+  [Domain Router] → selects top-K LoRA adapters (e.g., Criminal + Constitutional)
+      ↓                              ↓
+  [PageIndex — Client]     [PageIndex — Legal DB]
+           ↘                    ↙
+      [Active LoRA Adapter(s)] ← context merged here
+                ↓
+      Case Research / Q&A answer
+                ↓ (if argument mode)
+      [CoT Chain — Big Model API]
+                ↓
+      [Critic Model — scores top-K arguments]
+                ↓ threshold filter
+            Final Answer
+
+  Small LoRA models handle domain-specific reasoning. Big model only activates for argument generation (expensive task). Router is a
+  lightweight classifier (BERT-sized). PageIndex on both client docs AND your legal DB.
+
+  Pros: Cost-efficient, each model is focused and expert, clear upgrade path to fully on-prem (just swap API for local model),
+  conversation history naturally feeds back into router context
+  Cons: Router errors cascade downstream, more moving parts, initial training effort for each LoRA adapter
+
+  ---
+  Approach C — RAG-First, LoRA as Reranker
+
+  Query → PageIndex (legal DB + client docs) → top-N chunks retrieved
+                                                      ↓
+                                      LoRA adapter reranks/scores chunks
+                                                      ↓
+                                      Big model generates answer from top chunks
+
+  PageIndex does the heavy lifting. LoRA adapters act only as domain-specific rerankers (scoring which retrieved chunks matter most
+  for this case type). Big model always generates the final answer.
+
+  Pros: Simplest to build, most deterministic, easiest to debug, PageIndex already handles cross-references well
+  Cons: LoRA expertise is underused (just reranking, not reasoning), big model API cost stays high forever, weaker argument generation
+
+  ---
+  My Recommendation: Approach B
+
+  Here's why it fits your specific situation:
+
+  1. Your priority is case research — the router + LoRA adapter combo is perfect for this. A criminal lawyer asking "find relevant
+  precedents for section 302 BNS" should hit only the Criminal adapter, not distract with tax law
+  2. Argument generation is last priority — so the expensive "only use big model for CoT arguments" tradeoff is ideal. You don't pay
+  API costs for every Q&A query
+  3. Privacy upgrade path — when a law firm wants on-prem, you swap the big model API call with a local 70B model. Everything else
+  stays identical
+  4. The IIT Patna Qwen-7B QLoRA fits here — it slots in as your Criminal/Constitutional adapter while you train better ones. It's a
+  usable starting point, not a production model (only 1,500 training pairs, no proper benchmarks — but good enough to validate the
+  pipeline)
+
+  Does Approach B match your vision, or do you want to tweak anything before I go deeper?

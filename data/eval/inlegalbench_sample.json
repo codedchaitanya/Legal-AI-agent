@@ -1,0 +1,27 @@
+[
+  {
+    "question": "Under which section of the Bharatiya Nyaya Sanhita is murder defined?",
+    "answer": "Section 103",
+    "domain": "criminal"
+  },
+  {
+    "question": "What is the punishment for theft under BNS?",
+    "answer": "imprisonment up to three years",
+    "domain": "criminal"
+  },
+  {
+    "question": "Which Article of the Constitution protects the right to life and personal liberty?",
+    "answer": "Article 21",
+    "domain": "constitutional"
+  },
+  {
+    "question": "What is the equivalent of IPC Section 420 in the Bharatiya Nyaya Sanhita?",
+    "answer": "Section 318",
+    "domain": "criminal"
+  },
+  {
+    "question": "Under BNSS, within how many hours must an arrested person be produced before a magistrate?",
+    "answer": "twenty-four hours",
+    "domain": "criminal"
+  }
+]

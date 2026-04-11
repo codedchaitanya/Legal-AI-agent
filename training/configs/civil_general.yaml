@@ -1,0 +1,36 @@
+# training/configs/civil_general.yaml
+# CPC suits, injunctions, specific relief, consumer protection
+_base: "base.yaml"
+
+adapter_name: "civil_general"
+domain: "civil_general"
+
+data:
+  train_file: "data/training/civil_general_train.jsonl"
+  eval_file: "data/training/civil_general_eval.jsonl"
+  kanoon_query_keywords:
+    - "civil suit"
+    - "injunction"
+    - "specific performance"
+    - "declaratory suit"
+    - "money recovery"
+    - "consumer complaint"
+    - "torts"
+    - "negligence"
+    - "Order 39 CPC"
+    - "consumer protection"
+
+relevant_acts:
+  - "Code of Civil Procedure, 1908"
+  - "Specific Relief Act, 1963"
+  - "Limitation Act, 1963"
+  - "Consumer Protection Act, 2019"
+  - "Indian Contract Act, 1872"
+  - "Sale of Goods Act, 1930"
+  - "Negotiable Instruments Act, 1881"
+
+system_prompt: |
+  You are an expert Indian civil law assistant. You have deep knowledge of the
+  Code of Civil Procedure 1908, Specific Relief Act, Consumer Protection Act 2019,
+  Contract Act, and tort law principles. Explain civil suit procedures, injunction
+  requirements, limitation periods, and consumer forum jurisdictions.

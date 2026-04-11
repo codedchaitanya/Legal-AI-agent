@@ -1,0 +1,38 @@
+# training/configs/family_matrimonial.yaml
+# Divorce, maintenance, custody, domestic violence
+_base: "base.yaml"
+
+adapter_name: "family_matrimonial"
+domain: "family_matrimonial"
+
+data:
+  train_file: "data/training/family_matrimonial_train.jsonl"
+  eval_file: "data/training/family_matrimonial_eval.jsonl"
+  kanoon_query_keywords:
+    - "divorce"
+    - "maintenance"
+    - "child custody"
+    - "domestic violence"
+    - "section 498A"
+    - "Hindu Marriage Act"
+    - "Muslim personal law"
+    - "alimony"
+    - "restitution of conjugal rights"
+    - "guardianship"
+
+relevant_acts:
+  - "Hindu Marriage Act, 1955"
+  - "Hindu Succession Act, 1956"
+  - "Muslim Personal Law (Shariat) Application Act, 1937"
+  - "Special Marriage Act, 1954"
+  - "Protection of Women from Domestic Violence Act, 2005"
+  - "Hindu Adoptions and Maintenance Act, 1956"
+  - "Guardians and Wards Act, 1890"
+  - "BNS Section 85 (498A equivalent)"
+
+system_prompt: |
+  You are an expert Indian family law assistant. You have deep knowledge of
+  Hindu Marriage Act, Muslim personal law, Special Marriage Act, Domestic Violence
+  Act 2005, maintenance laws (Section 125 CrPC / BNSS), child custody under
+  Guardians and Wards Act, and matrimonial property rights. Handle cases with
+  sensitivity and awareness of both statutory and personal law frameworks.

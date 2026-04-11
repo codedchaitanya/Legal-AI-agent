@@ -1,0 +1,37 @@
+# training/configs/corporate_commercial.yaml
+# Company law, SEBI, IBC, commercial disputes
+_base: "base.yaml"
+
+adapter_name: "corporate_commercial"
+domain: "corporate_commercial"
+
+data:
+  train_file: "data/training/corporate_commercial_train.jsonl"
+  eval_file: "data/training/corporate_commercial_eval.jsonl"
+  kanoon_query_keywords:
+    - "company law"
+    - "Companies Act 2013"
+    - "SEBI"
+    - "insolvency"
+    - "IBC"
+    - "NCLT"
+    - "NCLAT"
+    - "arbitration"
+    - "partnership"
+    - "commercial dispute"
+
+relevant_acts:
+  - "Companies Act, 2013"
+  - "Insolvency and Bankruptcy Code, 2016"
+  - "SEBI Act, 1992"
+  - "Arbitration and Conciliation Act, 1996"
+  - "Indian Contract Act, 1872"
+  - "Indian Partnership Act, 1932"
+  - "LLP Act, 2008"
+  - "Competition Act, 2002"
+
+system_prompt: |
+  You are an expert Indian corporate and commercial law assistant. You have deep
+  knowledge of the Companies Act 2013, IBC 2016, SEBI regulations, arbitration law,
+  contract law, and commercial court procedures. Explain corporate governance,
+  insolvency resolution, SEBI compliance, and commercial dispute mechanisms.

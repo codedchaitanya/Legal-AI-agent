@@ -1,0 +1,108 @@
+But there's a catch: Real documents are 100s of pages. You can't feed all of them to a VLM at once — it would exceed the model's
+  memory limit (context window). Also, stuffing too much in causes "context rot" — the model gets confused and performs worse.
+
+  So you need a smart way to pick only the relevant pages first.
+
+  ---
+  What is PageIndex?
+
+  PageIndex solves exactly that problem — how do you find the right pages without OCR and without vectors?
+
+  Think about how YOU read a long book to find an answer:
+  1. You look at the Table of Contents
+  2. You pick the likely chapter
+  3. You flip to that page and read
+  4. If not enough, repeat
+
+  PageIndex does exactly this, but for LLMs.
+
+  It builds an LLM-friendly Table of Contents (ToC) — a structured JSON tree that summarizes the document's hierarchy (chapters →
+  sections → pages). The LLM reads this ToC, reasons about where the answer likely is, fetches that page, reads it, and keeps going
+  until it has enough to answer.
+
+  Query → Read ToC → Select page → Read page with VLM → Enough?
+                  ↑_____________No__________________________|
+                                                           Yes → Answer
+
+  This ToC index lives inside the LLM's context (they call it an "in-context index"), so the model can reason over it — not just match
+   keywords.
+
+  ---
+  How PageIndex changed RAG
+
+  RAG (Retrieval-Augmented Generation) = the standard way to handle large documents. Instead of feeding the whole doc to an LLM, you
+  retrieve relevant chunks first.
+
+  The traditional (vector-based) approach:
+
+  ┌───────────────┬────────────────────────────────────────────────┐
+  │     Step      │                  What happens                  │
+  ├───────────────┼────────────────────────────────────────────────┤
+  │ Preprocessing │ Split doc into fixed chunks (e.g., 512 tokens) │
+  ├───────────────┼────────────────────────────────────────────────┤
+  │ Embed         │ Convert each chunk to a vector number          │
+  ├───────────────┼────────────────────────────────────────────────┤
+  │ Store         │ Save in a vector database (Chroma, Pinecone)   │
+  ├───────────────┼────────────────────────────────────────────────┤
+  │ Query         │ Embed the question, find similar vectors       │
+  ├───────────────┼────────────────────────────────────────────────┤
+  │ Retrieve      │ Pass top-K matching chunks to LLM              │
+  └───────────────┴────────────────────────────────────────────────┘
+
+  5 big problems with this:
+
+  1. Query ≠ Knowledge mismatch — "What were the liabilities?" doesn't look similar to "Table 5.3: Balance Sheet" even though that's
+  the answer
+  2. Similarity ≠ Relevance — In legal/financial docs, many paragraphs sound similar but only one is actually relevant
+  3. Hard chunking breaks meaning — Cutting at 512 tokens might chop a sentence in half, destroying context
+  4. No memory of past questions — Each question is treated independently
+  5. Can't follow cross-references — "See Appendix G" fails because Appendix G doesn't look similar to the question
+
+  PageIndex (reasoning-based RAG) fixes all 5:
+
+  ┌────────────────────────┬───────────────────────┬───────────────────────────────────────────────────────────┐
+  │        Problem         │        Old RAG        │                         PageIndex                         │
+  ├────────────────────────┼───────────────────────┼───────────────────────────────────────────────────────────┤
+  │ Query mismatch         │ Guesses by similarity │ Reasons: "debt data is probably in the financial section" │
+  ├────────────────────────┼───────────────────────┼───────────────────────────────────────────────────────────┤
+  │ Similarity ≠ relevance │ Gets wrong chunks     │ Understands intent                                        │
+  ├────────────────────────┼───────────────────────┼───────────────────────────────────────────────────────────┤
+  │ Hard chunking          │ Breaks context        │ Retrieves full coherent sections                          │
+  ├────────────────────────┼───────────────────────┼───────────────────────────────────────────────────────────┤
+  │ No chat history        │ Forgets everything    │ Uses prior conversation context                           │
+  ├────────────────────────┼───────────────────────┼───────────────────────────────────────────────────────────┤
+  │ Cross-references       │ Fails                 │ Follows "see Appendix G" like a human                     │
+  └────────────────────────┴───────────────────────┴───────────────────────────────────────────────────────────┘
+
+  Real example from the doc: A query about "total deferred assets" — the main section only had the increase, not the total. It said
+  "See Appendix G." Vector RAG fails here. PageIndex followed the reference to Appendix G and got the right answer.
+
+  ---
+  Is PageIndex SOTA? When to use what?
+
+  PageIndex is a strong candidate for SOTA on complex, structured documents. But it's not "always better." Here's the honest
+  breakdown:
+
+  Use OCR / traditional approach when:
+
+  - Document is mostly plain text (no tables, no charts, no complex layout)
+  - You need the raw text for downstream processing (not just Q&A)
+  - Simple documents where spatial context doesn't matter
+  - Cost/speed is critical and the doc is simple
+
+  Use PageIndex (reasoning-based RAG) when:
+
+  - Documents have complex layouts — financial reports, legal filings, research papers
+  - Documents have tables, charts, merged cells, embedded figures
+  - Documents have cross-references ("see Section 4.2", "refer to Table 3")
+  - You're doing multi-turn Q&A (conversation with the doc)
+  - Standard vector RAG keeps giving wrong/irrelevant answers
+
+  Use Vision RAG (PageIndex + VLM, no OCR) when:
+
+  - All of the above PLUS the visual layout itself matters (diagrams, infographics, visual hierarchy)
+  - OCR would destroy meaning by flattening the 2D structure
+
+  ---
+  TL;DR in one sentence: OCR converts visual docs to text (lossy). Vector RAG finds similar text (dumb). PageIndex reasons about where
+   to look (smart) — like a human reading a Table of Contents instead of Ctrl+F'ing every word.

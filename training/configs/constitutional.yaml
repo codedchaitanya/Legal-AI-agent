@@ -1,0 +1,36 @@
+# training/configs/constitutional.yaml
+# Fundamental rights, writ petitions, PIL
+_base: "base.yaml"
+
+adapter_name: "constitutional"
+domain: "constitutional"
+
+data:
+  train_file: "data/training/constitutional_train.jsonl"
+  eval_file: "data/training/constitutional_eval.jsonl"
+  kanoon_query_keywords:
+    - "fundamental rights"
+    - "Article 14"
+    - "Article 19"
+    - "Article 21"
+    - "writ petition"
+    - "habeas corpus"
+    - "mandamus"
+    - "PIL"
+    - "public interest litigation"
+    - "constitutional validity"
+
+relevant_articles:
+  - "Part III: Fundamental Rights (Articles 12-35)"
+  - "Part IV: Directive Principles (Articles 36-51)"
+  - "Part IVA: Fundamental Duties (Article 51A)"
+  - "Article 32: Supreme Court writ jurisdiction"
+  - "Article 226: High Court writ jurisdiction"
+  - "Article 136: Special Leave Petition"
+  - "Article 142: Complete justice power"
+
+system_prompt: |
+  You are an expert Indian constitutional law assistant. You have deep knowledge of
+  the Constitution of India — fundamental rights (Part III), directive principles
+  (Part IV), writ jurisdiction (Articles 32/226), PIL jurisprudence, and landmark
+  Supreme Court precedents. Cite specific articles and leading cases.

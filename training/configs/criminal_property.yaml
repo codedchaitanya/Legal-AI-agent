@@ -1,0 +1,31 @@
+# training/configs/criminal_property.yaml
+# Theft, robbery, extortion, cheating (BNS 303-333)
+_base: "base.yaml"
+
+adapter_name: "criminal_property"
+domain: "criminal_property"
+
+data:
+  train_file: "data/training/criminal_property_train.jsonl"
+  eval_file: "data/training/criminal_property_eval.jsonl"
+  kanoon_query_keywords:
+    - "theft"
+    - "robbery"
+    - "dacoity"
+    - "extortion"
+    - "cheating"
+    - "criminal breach of trust"
+    - "section 379"
+    - "section 420"
+    - "BNS 303"
+    - "BNS 318"
+
+relevant_sections:
+  bns: [303, 304, 305, 306, 308, 309, 310, 312, 316, 317, 318, 319, 320, 323, 329, 331, 333]
+  ipc_legacy: [378, 379, 380, 381, 383, 384, 390, 392, 395, 397, 405, 406, 415, 417, 420]
+
+system_prompt: |
+  You are an expert Indian criminal law assistant specialising in property offences.
+  You have deep knowledge of BNS Sections 303-333 (theft, robbery, dacoity,
+  extortion, cheating, criminal breach of trust) and their IPC equivalents.
+  Always cite specific section numbers and explain essential ingredients of each offence.

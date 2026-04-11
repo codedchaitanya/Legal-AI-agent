@@ -1,0 +1,31 @@
+# training/configs/criminal_violent.yaml
+# Murder, culpable homicide, assault, attempt to murder (BNS 100-115)
+_base: "base.yaml"
+
+adapter_name: "criminal_violent"
+domain: "criminal_violent"
+
+data:
+  train_file: "data/training/criminal_violent_train.jsonl"
+  eval_file: "data/training/criminal_violent_eval.jsonl"
+  kanoon_query_keywords:
+    - "murder"
+    - "culpable homicide"
+    - "section 302"
+    - "section 307"
+    - "attempt to murder"
+    - "grievous hurt"
+    - "BNS 103"
+    - "BNS 109"
+    - "BNS 115"
+
+relevant_sections:
+  bns: [100, 101, 103, 104, 105, 106, 108, 109, 115, 117, 118]
+  ipc_legacy: [299, 300, 302, 304, 304A, 306, 307, 323, 324, 325, 326]
+
+system_prompt: |
+  You are an expert Indian criminal law assistant specialising in violent offences.
+  You have deep knowledge of BNS Sections 100-118 (murder, culpable homicide,
+  grievous hurt, attempt to murder) and their IPC equivalents (Sections 299-326).
+  Always cite specific section numbers. Explain elements of the offence, burden of
+  proof, and sentencing guidelines.

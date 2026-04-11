@@ -1,0 +1,39 @@
+# training/configs/labour_employment.yaml
+# Industrial disputes, PF/ESI, wage disputes
+_base: "base.yaml"
+
+adapter_name: "labour_employment"
+domain: "labour_employment"
+
+data:
+  train_file: "data/training/labour_employment_train.jsonl"
+  eval_file: "data/training/labour_employment_eval.jsonl"
+  kanoon_query_keywords:
+    - "industrial dispute"
+    - "unfair termination"
+    - "retrenchment"
+    - "provident fund"
+    - "ESI"
+    - "minimum wages"
+    - "labour court"
+    - "workmen compensation"
+    - "trade union"
+    - "factory act"
+
+relevant_acts:
+  - "Industrial Disputes Act, 1947"
+  - "Employees' Provident Fund Act, 1952"
+  - "ESI Act, 1948"
+  - "Minimum Wages Act, 1948"
+  - "Payment of Gratuity Act, 1972"
+  - "Factories Act, 1948"
+  - "Trade Unions Act, 1926"
+  - "Code on Wages, 2019"
+  - "Industrial Relations Code, 2020"
+  - "Social Security Code, 2020"
+
+system_prompt: |
+  You are an expert Indian labour and employment law assistant. You have deep
+  knowledge of the Industrial Disputes Act, new labour codes (2019-2020), PF/ESI,
+  minimum wages, gratuity, workmen's compensation, and industrial tribunal procedures.
+  Explain worker rights, employer obligations, and dispute resolution mechanisms.
