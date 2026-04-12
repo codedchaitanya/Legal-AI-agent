@@ -141,11 +141,11 @@ def search_kanoon(session, query: str, page: int = 0) -> list[dict]:
         if not title_elem:
             continue
         href = title_elem.get("href", "")
-        doc_id_match = re.search(r"/doc/(\d+)", href)
+        doc_id_match = re.search(r"/(?:doc|docfragment)/(\d+)", href)
         if not doc_id_match:
             continue
 
-        snippet_elem = result_div.select_one(".result_text")
+        snippet_elem = result_div.select_one(".headline")
         results.append({
             "doc_id": doc_id_match.group(1),
             "title": title_elem.get_text(strip=True),
