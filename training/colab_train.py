@@ -313,6 +313,194 @@ def train_on_colab(
 
 
 # ============================================================
+# Fast multi-domain trainer (loads model once)
+# ============================================================
+
+ALL_DOMAINS = [
+    "criminal_violent", "criminal_property", "kidnapping_trafficking",
+    "sexual_offences", "land_property", "family_matrimonial",
+    "constitutional", "corporate_commercial", "labour_employment",
+    "cyber_digital", "tax_fiscal", "civil_general",
+]
+
+def train_all_adapters(
+    domains: list = None,
+    epochs: int = 3,
+    batch_size: int = 4,
+    grad_accum: int = 4,
+    learning_rate: float = 2e-4,
+    lora_r: int = 32,
+    lora_alpha: int = 64,
+    max_seq_length: int = 1024,
+    base_model: str = "Qwen/Qwen2.5-7B-Instruct",
+):
+    """Train all domain adapters with a single model load — much faster than calling
+    train_on_colab() per domain, which reloads the 7B model each time."""
+    import torch, time, json, os
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainerCallback, TrainerState, TrainerControl, PrinterCallback
+    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+    from trl import SFTTrainer, SFTConfig
+    from datasets import Dataset
+    from pathlib import Path
+
+    if domains is None:
+        domains = ALL_DOMAINS
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("No CUDA GPU detected.")
+
+    os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+    torch.cuda.empty_cache()
+
+    use_bf16 = torch.cuda.is_bf16_supported()
+    compute_dtype = torch.bfloat16 if use_bf16 else torch.float16
+    gpu_name = torch.cuda.get_device_name(0)
+    gpu_total_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+
+    print(f"{'='*60}")
+    print(f"Training {len(domains)} adapters on {gpu_name} ({gpu_total_gb:.1f} GB)")
+    print(f"Domains: {', '.join(domains)}")
+    print(f"{'='*60}\n")
+
+    # ── Load tokenizer + model ONCE ──────────────────────────
+    print("Loading tokenizer …")
+    tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.model_max_length = max_seq_length
+
+    print("Loading model with 4-bit quantization …")
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=compute_dtype,
+        bnb_4bit_use_double_quant=True,
+    )
+    base = AutoModelForCausalLM.from_pretrained(
+        base_model, quantization_config=bnb_config,
+        device_map="auto", trust_remote_code=True,
+    )
+    base.config.use_cache = False
+    base = prepare_model_for_kbit_training(base, use_gradient_checkpointing=False)
+    print("Model loaded. Starting domain loop …\n")
+
+    total_start = time.time()
+    results = {}
+
+    for idx, domain in enumerate(domains):
+        domain_start = time.time()
+        train_file = f"data/training/{domain}_train.jsonl"
+        output_dir = f"adapters/{domain}"
+
+        if not Path(train_file).exists():
+            print(f"[{idx+1}/{len(domains)}] SKIP {domain} — {train_file} not found")
+            continue
+
+        print(f"\n{'='*60}")
+        print(f"[{idx+1}/{len(domains)}] Training: {domain}")
+        print(f"{'='*60}")
+
+        # Load data
+        items = [json.loads(l) for l in open(train_file, encoding="utf-8") if l.strip()]
+        train_ds = Dataset.from_list(items)
+        print(f"Samples: {len(train_ds)}")
+
+        # Fresh LoRA adapter
+        lora_config = LoraConfig(
+            r=lora_r, lora_alpha=lora_alpha, lora_dropout=0.05,
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+            bias="none", task_type="CAUSAL_LM",
+        )
+        if idx == 0:
+            model = get_peft_model(base, lora_config, adapter_name=domain)
+        else:
+            model.add_adapter(domain, lora_config)
+            model.set_adapter(domain)
+            model.enable_adapter_layers()
+
+        trainable, total = model.get_nb_trainable_parameters()
+        print(f"Trainable: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
+
+        steps_per_epoch = max(1, len(train_ds) // (batch_size * grad_accum))
+        total_steps = steps_per_epoch * epochs
+
+        training_args = SFTConfig(
+            output_dir=output_dir,
+            num_train_epochs=epochs,
+            per_device_train_batch_size=batch_size,
+            gradient_accumulation_steps=grad_accum,
+            learning_rate=learning_rate,
+            weight_decay=0.01,
+            warmup_ratio=0.03,
+            lr_scheduler_type="cosine",
+            logging_steps=10,
+            save_steps=500,
+            save_total_limit=1,
+            bf16=use_bf16,
+            fp16=not use_bf16,
+            gradient_checkpointing=False,  # disabled — enough VRAM
+            optim="paged_adamw_8bit",
+            report_to="none",
+            packing=False,
+        )
+
+        class _Cb(TrainerCallback):
+            def __init__(self, total):
+                self.total = total; self.t0 = None; self.ep = 0; self.ep_t = None
+            def on_train_begin(self, args, state, control, **kw):
+                self.t0 = time.time()
+            def on_epoch_begin(self, args, state, control, **kw):
+                self.ep += 1; self.ep_t = time.time()
+                print(f"  Epoch {self.ep}/{args.num_train_epochs} started")
+            def on_epoch_end(self, args, state, control, **kw):
+                print(f"  Epoch {self.ep}/{args.num_train_epochs} done in {(time.time()-self.ep_t)/60:.1f} min")
+            def on_log(self, args, state, control, logs=None, **kw):
+                if not logs or state.global_step == 0: return
+                elapsed = time.time() - self.t0
+                pct = state.global_step / self.total
+                eta = (elapsed / pct - elapsed) if pct > 0 else 0
+                loss = logs.get("loss", "—")
+                loss_s = f"{loss:.4f}" if isinstance(loss, float) else loss
+                bar = "█" * int(20*pct) + "░" * (20 - int(20*pct))
+                alloc = torch.cuda.memory_allocated()/1e9
+                print(f"  [{bar}] {state.global_step}/{self.total} loss={loss_s} elapsed={elapsed/60:.1f}m ETA={eta/60:.1f}m GPU={alloc:.1f}GB")
+
+        trainer = SFTTrainer(
+            model=model, args=training_args,
+            train_dataset=train_ds, processing_class=tokenizer,
+            max_seq_length=max_seq_length, callbacks=[_Cb(total_steps)],
+        )
+        print(f"Steps/epoch: {steps_per_epoch}  |  Total: {total_steps}")
+        result = trainer.train()
+
+        # Save
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        model.save_pretrained(output_dir)
+        tokenizer.save_pretrained(output_dir)
+        json.dump({
+            "adapter_name": domain, "base_model": base_model,
+            "lora_r": lora_r, "lora_alpha": lora_alpha,
+            "train_samples": len(train_ds), "epochs": epochs,
+        }, open(f"{output_dir}/adapter_metadata.json", "w"), indent=2)
+
+        elapsed_domain = (time.time() - domain_start) / 60
+        results[domain] = {"runtime_min": round(elapsed_domain, 1), "loss": result.metrics.get("train_loss")}
+        print(f"  Done in {elapsed_domain:.1f} min → saved to {output_dir}")
+
+        # Free LoRA weights before next domain
+        model.delete_adapter(domain)
+        torch.cuda.empty_cache()
+
+    total_min = (time.time() - total_start) / 60
+    print(f"\n{'='*60}")
+    print(f"All {len(results)}/{len(domains)} adapters trained in {total_min:.1f} min")
+    for d, r in results.items():
+        print(f"  {d}: {r['runtime_min']} min  loss={r['loss']:.4f}" if isinstance(r['loss'], float) else f"  {d}: {r['runtime_min']} min")
+    print(f"{'='*60}")
+    return results
+
+
+# ============================================================
 # CLI entry point
 # ============================================================
 if __name__ == "__main__":
