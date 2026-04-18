@@ -332,6 +332,7 @@ def train_all_adapters(
     lora_r: int = 32,
     lora_alpha: int = 64,
     max_seq_length: int = 1024,
+    early_stopping_patience: int = 3,
     base_model: str = "Qwen/Qwen2.5-7B-Instruct",
 ):
     """Train all domain adapters with a single model load — much faster than calling
@@ -433,7 +434,7 @@ def train_all_adapters(
             weight_decay=0.01,
             warmup_ratio=0.03,
             lr_scheduler_type="cosine",
-            logging_steps=10,
+            logging_steps=5,
             save_steps=500,
             save_total_limit=1,
             bf16=use_bf16,
@@ -445,30 +446,48 @@ def train_all_adapters(
         )
 
         class _Cb(TrainerCallback):
-            def __init__(self, total):
+            def __init__(self, total, patience):
                 self.total = total; self.t0 = None; self.ep = 0; self.ep_t = None
+                self.patience = patience
+                self.best_loss = float("inf")
+                self.bad_steps = 0
+
             def on_train_begin(self, args, state, control, **kw):
                 self.t0 = time.time()
+
             def on_epoch_begin(self, args, state, control, **kw):
                 self.ep += 1; self.ep_t = time.time()
                 print(f"  Epoch {self.ep}/{args.num_train_epochs} started")
+
             def on_epoch_end(self, args, state, control, **kw):
                 print(f"  Epoch {self.ep}/{args.num_train_epochs} done in {(time.time()-self.ep_t)/60:.1f} min")
+
             def on_log(self, args, state, control, logs=None, **kw):
                 if not logs or state.global_step == 0: return
                 elapsed = time.time() - self.t0
                 pct = state.global_step / self.total
                 eta = (elapsed / pct - elapsed) if pct > 0 else 0
-                loss = logs.get("loss", "—")
-                loss_s = f"{loss:.4f}" if isinstance(loss, float) else loss
+                loss = logs.get("loss", None)
+                loss_s = f"{loss:.4f}" if isinstance(loss, float) else "—"
                 bar = "█" * int(20*pct) + "░" * (20 - int(20*pct))
                 alloc = torch.cuda.memory_allocated()/1e9
                 print(f"  [{bar}] {state.global_step}/{self.total} loss={loss_s} elapsed={elapsed/60:.1f}m ETA={eta/60:.1f}m GPU={alloc:.1f}GB")
 
+                # Early stopping — watch training loss
+                if isinstance(loss, float):
+                    if loss < self.best_loss:
+                        self.best_loss = loss
+                        self.bad_steps = 0
+                    else:
+                        self.bad_steps += 1
+                        if self.bad_steps >= self.patience:
+                            print(f"  ⏹ Early stopping: loss hasn't improved for {self.patience} consecutive logs (best={self.best_loss:.4f})")
+                            control.should_training_stop = True
+
         trainer = SFTTrainer(
             model=model, args=training_args,
             train_dataset=train_ds, processing_class=tokenizer,
-            max_seq_length=max_seq_length, callbacks=[_Cb(total_steps)],
+            max_seq_length=max_seq_length, callbacks=[_Cb(total_steps, early_stopping_patience)],
         )
         print(f"Steps/epoch: {steps_per_epoch}  |  Total: {total_steps}")
         result = trainer.train()
