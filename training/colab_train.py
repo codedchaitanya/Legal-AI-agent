@@ -159,6 +159,10 @@ def train_on_colab(
             "In Colab: Runtime → Change runtime type → T4 GPU, then restart."
         )
 
+    import os
+    os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+    torch.cuda.empty_cache()
+
     # Pick precision based on hardware (T4 = fp16, A100 = bf16)
     use_bf16 = torch.cuda.is_bf16_supported()
     compute_dtype = torch.bfloat16 if use_bf16 else torch.float16
