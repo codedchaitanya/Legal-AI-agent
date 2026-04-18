@@ -172,23 +172,21 @@ def create_case(title: str, api_key: str):
 
 # ── UI ───────────────────────────────────────────────────────────────────────
 
-theme = gr.themes.Soft(
+THEME = gr.themes.Soft(
     primary_hue="indigo",
     secondary_hue="slate",
     neutral_hue="gray",
     font=[gr.themes.GoogleFont("Inter"), "sans-serif"],
 )
 
-with gr.Blocks(
-    title="Indian Legal AI",
-    theme=theme,
-    css="""
-    .sidebar { background: #f8f9ff; border-right: 1px solid #e2e8f0; padding: 16px; }
-    .badge { font-size: 11px; color: #64748b; margin-top: 4px; }
-    .section-title { font-weight: 600; font-size: 13px; color: #374151; margin-bottom: 4px; }
-    footer { display: none !important; }
-    """,
-) as demo:
+CSS = """
+.sidebar { background: #f8f9ff; border-right: 1px solid #e2e8f0; padding: 16px; }
+.badge { font-size: 11px; color: #64748b; margin-top: 4px; }
+.section-title { font-weight: 600; font-size: 13px; color: #374151; margin-bottom: 4px; }
+footer { display: none !important; }
+"""
+
+with gr.Blocks(title="Indian Legal AI") as demo:
 
     session_state = gr.State("")
 
@@ -230,10 +228,8 @@ with gr.Blocks(
                 with gr.Tab("🔍 Legal Research"):
                     research_chatbot = gr.Chatbot(
                         height=480,
-                        type="messages",
                         placeholder="Ask anything about your case or Indian law...",
                         show_label=False,
-                        avatar_images=(None, "https://api.dicebear.com/7.x/bottts/svg?seed=legal"),
                     )
                     with gr.Row():
                         research_input = gr.Textbox(
@@ -372,4 +368,4 @@ Document (PDF/Image/Text)
 
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860, share=False)
+    demo.launch(server_name="0.0.0.0", server_port=7860, share=False, theme=THEME, css=CSS)
