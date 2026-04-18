@@ -71,9 +71,9 @@ def train_on_colab(
         base_model: HuggingFace model ID
     """
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainingArguments
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-    from trl import SFTTrainer
+    from trl import SFTTrainer, SFTConfig
     from datasets import Dataset
     import json
     from pathlib import Path
@@ -143,8 +143,8 @@ def train_on_colab(
         eval_ds = Dataset.from_list(eval_items)
         print(f"Eval samples: {len(eval_ds)}")
 
-    # Training args
-    training_args = TrainingArguments(
+    # Training args (SFTConfig extends TrainingArguments with packing/max_seq_length)
+    training_args = SFTConfig(
         output_dir=output_dir,
         num_train_epochs=epochs,
         per_device_train_batch_size=batch_size,
@@ -162,14 +162,15 @@ def train_on_colab(
         gradient_checkpointing=True,
         optim="paged_adamw_8bit",
         report_to="none",
+        packing=False,
+        max_seq_length=max_seq_length,
     )
 
     # Train
     trainer = SFTTrainer(
         model=model, args=training_args,
         train_dataset=train_ds, eval_dataset=eval_ds,
-        processing_class=tokenizer, packing=False,
-        max_seq_length=max_seq_length,
+        processing_class=tokenizer,
     )
 
     print("Starting training …")

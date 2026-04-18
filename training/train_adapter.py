@@ -104,10 +104,9 @@ def train(config: dict, output_dir: str | None = None, resume_from: str | None =
         AutoModelForCausalLM,
         AutoTokenizer,
         BitsAndBytesConfig,
-        TrainingArguments,
     )
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-    from trl import SFTTrainer
+    from trl import SFTTrainer, SFTConfig
 
     adapter_name = config.get("adapter_name", "adapter")
     base_model_id = config.get("base_model_id", "Qwen/Qwen2.5-7B-Instruct")
@@ -181,8 +180,8 @@ def train(config: dict, output_dir: str | None = None, resume_from: str | None =
     train_ds, eval_ds = load_dataset(train_file, eval_file, max_samples)
     logger.info("Train samples: %d, Eval samples: %d", len(train_ds), len(eval_ds) if eval_ds else 0)
 
-    # --- Training arguments ---
-    training_args = TrainingArguments(
+    # --- Training arguments (SFTConfig extends TrainingArguments with packing/max_seq_length) ---
+    training_args = SFTConfig(
         output_dir=output_dir,
         num_train_epochs=train_cfg.get("num_train_epochs", 3),
         per_device_train_batch_size=train_cfg.get("per_device_train_batch_size", 4),
@@ -201,6 +200,8 @@ def train(config: dict, output_dir: str | None = None, resume_from: str | None =
         optim=train_cfg.get("optim", "paged_adamw_8bit"),
         report_to=train_cfg.get("report_to", "none"),
         seed=data_cfg.get("seed", 42),
+        packing=sft_cfg.get("packing", False),
+        max_seq_length=train_cfg.get("max_seq_length", 2048),
     )
 
     # --- SFT Trainer ---
@@ -210,8 +211,6 @@ def train(config: dict, output_dir: str | None = None, resume_from: str | None =
         train_dataset=train_ds,
         eval_dataset=eval_ds,
         processing_class=tokenizer,
-        packing=sft_cfg.get("packing", False),
-        max_seq_length=train_cfg.get("max_seq_length", 2048),
     )
 
     # --- Train ---
