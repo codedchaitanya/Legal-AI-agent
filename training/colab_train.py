@@ -4,6 +4,7 @@ Colab-optimised training wrapper.
 INSTRUCTIONS:
 =============
 1. Open Google Colab with a T4 or A100 GPU runtime
+   (Runtime → Change runtime type → Hardware accelerator → T4 GPU)
 2. Upload your training data (JSONL files) to Google Drive
 3. Run this script cell by cell
 
@@ -36,7 +37,21 @@ print(f"Files: {os.listdir('.')}")
 """
 
 # ============================================================
-# CELL 3: Training function
+# CELL 3: Sanity check — make sure GPU is attached
+# ============================================================
+GPU_CHECK = """
+import torch
+assert torch.cuda.is_available(), (
+    "No GPU detected! Go to Runtime → Change runtime type → "
+    "Hardware accelerator → T4 GPU, then restart."
+)
+print(f"GPU: {torch.cuda.get_device_name(0)}")
+print(f"bf16 supported: {torch.cuda.is_bf16_supported()}")
+!nvidia-smi
+"""
+
+# ============================================================
+# CELL 4: Training function
 # ============================================================
 
 def train_on_colab(
@@ -83,20 +98,32 @@ def train_on_colab(
     if output_dir is None:
         output_dir = f"adapters/{domain}"
 
+    # Hard-fail early if no GPU — QLoRA on CPU will not work.
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "No CUDA GPU detected. QLoRA 4-bit training requires a GPU. "
+            "In Colab: Runtime → Change runtime type → T4 GPU, then restart."
+        )
+
+    # Pick precision based on hardware (T4 = fp16, A100 = bf16)
+    use_bf16 = torch.cuda.is_bf16_supported()
+    compute_dtype = torch.bfloat16 if use_bf16 else torch.float16
+
     print(f"{'='*60}")
     print(f"Training adapter: {domain}")
     print(f"Base model: {base_model}")
     print(f"LoRA r={lora_r}, alpha={lora_alpha}")
     print(f"Train file: {train_file}")
     print(f"Output: {output_dir}")
-    print(f"GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
+    print(f"GPU: {torch.cuda.get_device_name(0)}")
+    print(f"Precision: {'bf16' if use_bf16 else 'fp16'}")
     print(f"{'='*60}")
 
     # Quantization
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_compute_dtype=compute_dtype,
         bnb_4bit_use_double_quant=True,
     )
 
@@ -105,19 +132,27 @@ def train_on_colab(
     tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    # In TRL 0.24, max sequence length is driven by the tokenizer, not SFTConfig.
+    tokenizer.model_max_length = max_seq_length
 
     # Model
     print("Loading model with 4-bit quantization …")
     model = AutoModelForCausalLM.from_pretrained(
-        base_model, quantization_config=bnb_config, device_map="auto", trust_remote_code=True,
+        base_model,
+        quantization_config=bnb_config,
+        device_map="auto",
+        trust_remote_code=True,
     )
     model = prepare_model_for_kbit_training(model)
 
     # LoRA
     peft_config = LoraConfig(
-        r=lora_r, lora_alpha=lora_alpha, lora_dropout=0.05,
+        r=lora_r,
+        lora_alpha=lora_alpha,
+        lora_dropout=0.05,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-        bias="none", task_type="CAUSAL_LM",
+        bias="none",
+        task_type="CAUSAL_LM",
     )
     model = get_peft_model(model, peft_config)
     trainable, total = model.get_nb_trainable_parameters()
@@ -143,7 +178,9 @@ def train_on_colab(
         eval_ds = Dataset.from_list(eval_items)
         print(f"Eval samples: {len(eval_ds)}")
 
-    # Training args (SFTConfig extends TrainingArguments with packing/max_seq_length)
+    # Training args
+    # NOTE: max_seq_length was removed from SFTConfig in newer TRL versions.
+    # It is now controlled via tokenizer.model_max_length (set above).
     training_args = SFTConfig(
         output_dir=output_dir,
         num_train_epochs=epochs,
@@ -158,18 +195,20 @@ def train_on_colab(
         eval_strategy="steps" if eval_ds else "no",
         eval_steps=100 if eval_ds else None,
         save_total_limit=2,
-        bf16=True,
+        bf16=use_bf16,
+        fp16=not use_bf16,
         gradient_checkpointing=True,
         optim="paged_adamw_8bit",
         report_to="none",
         packing=False,
-        max_seq_length=max_seq_length,
     )
 
     # Train
     trainer = SFTTrainer(
-        model=model, args=training_args,
-        train_dataset=train_ds, eval_dataset=eval_ds,
+        model=model,
+        args=training_args,
+        train_dataset=train_ds,
+        eval_dataset=eval_ds,
         processing_class=tokenizer,
     )
 
@@ -182,9 +221,14 @@ def train_on_colab(
     tokenizer.save_pretrained(output_dir)
 
     metadata = {
-        "adapter_name": domain, "base_model": base_model,
-        "lora_r": lora_r, "lora_alpha": lora_alpha,
-        "train_samples": len(train_ds), "epochs": epochs,
+        "adapter_name": domain,
+        "base_model": base_model,
+        "lora_r": lora_r,
+        "lora_alpha": lora_alpha,
+        "train_samples": len(train_ds),
+        "epochs": epochs,
+        "max_seq_length": max_seq_length,
+        "precision": "bf16" if use_bf16 else "fp16",
     }
     with open(f"{output_dir}/adapter_metadata.json", "w") as f:
         json.dump(metadata, f, indent=2)
@@ -208,6 +252,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--lora-r", type=int, default=32)
+    parser.add_argument("--max-seq-length", type=int, default=2048)
     parser.add_argument("--output-dir", default=None)
     args = parser.parse_args()
 
@@ -219,5 +264,6 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         learning_rate=args.lr,
         lora_r=args.lora_r,
+        max_seq_length=args.max_seq_length,
         output_dir=args.output_dir,
     )
