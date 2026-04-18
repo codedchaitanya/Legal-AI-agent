@@ -172,18 +172,126 @@ def create_case(title: str, api_key: str):
 
 # ── UI ───────────────────────────────────────────────────────────────────────
 
-THEME = gr.themes.Soft(
-    primary_hue="indigo",
-    secondary_hue="slate",
+THEME = gr.themes.Base(
+    primary_hue="orange",
+    secondary_hue="orange",
     neutral_hue="gray",
     font=[gr.themes.GoogleFont("Inter"), "sans-serif"],
+).set(
+    body_background_fill="#0d0d0d",
+    body_background_fill_dark="#0d0d0d",
+    body_text_color="#f0f0f0",
+    body_text_color_dark="#f0f0f0",
+    background_fill_primary="#141414",
+    background_fill_primary_dark="#141414",
+    background_fill_secondary="#1a1a1a",
+    background_fill_secondary_dark="#1a1a1a",
+    border_color_primary="#2a2a2a",
+    border_color_primary_dark="#2a2a2a",
+    button_primary_background_fill="#ea580c",
+    button_primary_background_fill_dark="#ea580c",
+    button_primary_background_fill_hover="#c2410c",
+    button_primary_background_fill_hover_dark="#c2410c",
+    button_primary_text_color="#ffffff",
+    button_primary_text_color_dark="#ffffff",
+    button_secondary_background_fill="#1f1f1f",
+    button_secondary_background_fill_dark="#1f1f1f",
+    button_secondary_background_fill_hover="#2a2a2a",
+    button_secondary_background_fill_hover_dark="#2a2a2a",
+    button_secondary_text_color="#f0f0f0",
+    button_secondary_text_color_dark="#f0f0f0",
+    button_secondary_border_color="#3a3a3a",
+    button_secondary_border_color_dark="#3a3a3a",
+    input_background_fill="#1a1a1a",
+    input_background_fill_dark="#1a1a1a",
+    input_border_color="#2a2a2a",
+    input_border_color_dark="#2a2a2a",
+    input_placeholder_color="#6b7280",
+    input_placeholder_color_dark="#6b7280",
+    shadow_drop="none",
+    shadow_drop_lg="none",
+    block_background_fill="#141414",
+    block_background_fill_dark="#141414",
+    block_border_color="#2a2a2a",
+    block_border_color_dark="#2a2a2a",
+    block_label_background_fill="#1a1a1a",
+    block_label_background_fill_dark="#1a1a1a",
+    block_label_text_color="#ea580c",
+    block_label_text_color_dark="#ea580c",
+    block_title_text_color="#ea580c",
+    block_title_text_color_dark="#ea580c",
+    checkbox_background_color="#1a1a1a",
+    checkbox_background_color_dark="#1a1a1a",
+    checkbox_border_color="#3a3a3a",
+    checkbox_border_color_dark="#3a3a3a",
+    color_accent="#ea580c",
+    color_accent_soft="#7c2d12",
+    link_text_color="#fb923c",
+    link_text_color_dark="#fb923c",
+    link_text_color_visited="#f97316",
+    link_text_color_active="#ea580c",
+    slider_color="#ea580c",
+    stat_background_fill="#1a1a1a",
+    table_even_background_fill="#141414",
+    table_odd_background_fill="#1a1a1a",
 )
 
 CSS = """
-.sidebar { background: #f8f9ff; border-right: 1px solid #e2e8f0; padding: 16px; }
-.badge { font-size: 11px; color: #64748b; margin-top: 4px; }
-.section-title { font-weight: 600; font-size: 13px; color: #374151; margin-bottom: 4px; }
+/* ── Canvas ── */
+body, .gradio-container { background: #0d0d0d !important; }
+.contain { background: #0d0d0d !important; }
+
+/* ── Sidebar ── */
+.sidebar {
+    background: #111111 !important;
+    border-right: 2px solid #2a2a2a !important;
+    padding: 20px 16px !important;
+    border-radius: 0 !important;
+}
+
+/* ── Orange accents for headers ── */
+h1 { color: #ea580c !important; }
+h2 { color: #f97316 !important; font-size: 1.1em !important; }
+.section-title { font-weight: 700; font-size: 12px; color: #ea580c; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+
+/* ── Tab nav ── */
+.tab-nav { border-bottom: 1px solid #2a2a2a !important; background: #111111 !important; }
+.tab-nav button { color: #9ca3af !important; border-radius: 0 !important; padding: 10px 16px !important; }
+.tab-nav button.selected, .tab-nav button[aria-selected="true"] {
+    color: #ea580c !important;
+    border-bottom: 2px solid #ea580c !important;
+    background: transparent !important;
+    font-weight: 600 !important;
+}
+
+/* ── Chatbot bubbles ── */
+.message.user > div, [data-testid="user"] { background: #1e1e1e !important; border: 1px solid #2a2a2a !important; }
+.message.bot > div, [data-testid="bot"] { background: #1a1200 !important; border: 1px solid #3a2a00 !important; }
+
+/* ── Inputs ── */
+input, textarea, .input-wrap { caret-color: #ea580c !important; }
+input:focus, textarea:focus { border-color: #ea580c !important; outline: none !important; box-shadow: 0 0 0 2px #7c2d1240 !important; }
+
+/* ── Radio group ── */
+.wrap.svelte-yigbas span { color: #f0f0f0 !important; }
+input[type="radio"]:checked + span { color: #ea580c !important; }
+
+/* ── Markdown in output ── */
+.prose h3 { color: #ea580c !important; }
+.prose strong { color: #fb923c !important; }
+blockquote { border-left: 3px solid #ea580c !important; color: #9ca3af !important; }
+
+/* ── Misc ── */
+.badge { font-size: 11px; color: #6b7280; margin-top: 4px; }
 footer { display: none !important; }
+code { background: #1f1f1f !important; color: #fb923c !important; padding: 1px 5px; border-radius: 3px; }
+pre { background: #1a1a1a !important; border: 1px solid #2a2a2a !important; }
+
+/* ── Dividers ── */
+hr { border-color: #2a2a2a !important; margin: 12px 0 !important; }
+
+/* ── File upload ── */
+.file-preview { background: #1a1a1a !important; border-color: #2a2a2a !important; }
 """
 
 with gr.Blocks(title="Indian Legal AI") as demo:
@@ -193,7 +301,7 @@ with gr.Blocks(title="Indian Legal AI") as demo:
     with gr.Row():
         # ── Sidebar ───────────────────────────────────────────────────────
         with gr.Column(scale=1, min_width=260, elem_classes="sidebar"):
-            gr.Markdown("## ⚖️ Legal AI\n*Indian Case Research*")
+            gr.Markdown("## ⚖️ Legal AI\n<span style='color:#ea580c;font-size:12px;'>Indian Case Research</span>")
             gr.Markdown("---")
 
             gr.Markdown("**Configuration**", elem_classes="section-title")
