@@ -18,9 +18,6 @@ build/
 *.env.local
 
 # ML / data
-adapters/
-*.ckpt
-*.safetensors
 data/legal_db/
 
 # IDE
