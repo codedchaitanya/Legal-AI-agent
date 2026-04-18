@@ -381,7 +381,7 @@ def train_all_adapters(
         device_map="auto", trust_remote_code=True,
     )
     base.config.use_cache = False
-    base = prepare_model_for_kbit_training(base, use_gradient_checkpointing=False)
+    base = prepare_model_for_kbit_training(base, use_gradient_checkpointing=True)
     print("Model loaded. Starting domain loop …\n")
 
     total_start = time.time()
@@ -438,7 +438,7 @@ def train_all_adapters(
             save_total_limit=1,
             bf16=use_bf16,
             fp16=not use_bf16,
-            gradient_checkpointing=False,  # disabled — enough VRAM
+            gradient_checkpointing=True,
             optim="paged_adamw_8bit",
             report_to="none",
             packing=False,
