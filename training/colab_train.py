@@ -86,12 +86,66 @@ def train_on_colab(
         base_model: HuggingFace model ID
     """
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    import time
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainerCallback, TrainerState, TrainerControl
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     from trl import SFTTrainer, SFTConfig
     from datasets import Dataset
     import json
     from pathlib import Path
+
+    class ProgressCallback(TrainerCallback):
+        def __init__(self, total_steps: int):
+            self.total_steps = total_steps
+            self.start_time = None
+            self.epoch_start = None
+
+        def _gpu_mem(self) -> str:
+            alloc = torch.cuda.memory_allocated() / 1e9
+            reserved = torch.cuda.memory_reserved() / 1e9
+            return f"{alloc:.1f}/{reserved:.1f} GB"
+
+        def on_train_begin(self, args, state: TrainerState, control: TrainerControl, **kw):
+            self.start_time = time.time()
+            print(f"\n{'='*60}")
+            print(f"  Training started — {self.total_steps} total steps")
+            print(f"  GPU memory at start: {self._gpu_mem()} (alloc/reserved)")
+            print(f"{'='*60}\n")
+
+        def on_epoch_begin(self, args, state: TrainerState, control: TrainerControl, **kw):
+            self.epoch_start = time.time()
+            epoch = int(state.epoch) + 1
+            print(f"\n--- Epoch {epoch}/{args.num_train_epochs} started ---")
+
+        def on_epoch_end(self, args, state: TrainerState, control: TrainerControl, **kw):
+            elapsed = time.time() - self.epoch_start
+            epoch = int(state.epoch)
+            print(f"--- Epoch {epoch}/{args.num_train_epochs} done in {elapsed/60:.1f} min  |  GPU mem: {self._gpu_mem()} ---\n")
+
+        def on_log(self, args, state: TrainerState, control: TrainerControl, logs=None, **kw):
+            if not logs or state.global_step == 0:
+                return
+            elapsed = time.time() - self.start_time
+            pct = state.global_step / self.total_steps
+            eta_s = (elapsed / pct - elapsed) if pct > 0 else 0
+            bar_len = 30
+            filled = int(bar_len * pct)
+            bar = "█" * filled + "░" * (bar_len - filled)
+
+            loss = logs.get("loss", logs.get("train_loss", "—"))
+            lr = logs.get("learning_rate", "—")
+            grad = logs.get("grad_norm", "—")
+
+            loss_str = f"{loss:.4f}" if isinstance(loss, float) else loss
+            lr_str = f"{lr:.2e}" if isinstance(lr, float) else lr
+            grad_str = f"{grad:.3f}" if isinstance(grad, float) else grad
+
+            print(
+                f"[{bar}] {state.global_step}/{self.total_steps} ({100*pct:.1f}%)  "
+                f"loss={loss_str}  lr={lr_str}  grad={grad_str}  "
+                f"elapsed={elapsed/60:.1f}m  ETA={eta_s/60:.1f}m  "
+                f"GPU={self._gpu_mem()}"
+            )
 
     if train_file is None:
         train_file = f"data/training/{domain}_train.jsonl"
@@ -109,13 +163,15 @@ def train_on_colab(
     use_bf16 = torch.cuda.is_bf16_supported()
     compute_dtype = torch.bfloat16 if use_bf16 else torch.float16
 
+    gpu_name = torch.cuda.get_device_name(0)
+    gpu_total_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
     print(f"{'='*60}")
     print(f"Training adapter: {domain}")
     print(f"Base model: {base_model}")
     print(f"LoRA r={lora_r}, alpha={lora_alpha}")
     print(f"Train file: {train_file}")
     print(f"Output: {output_dir}")
-    print(f"GPU: {torch.cuda.get_device_name(0)}")
+    print(f"GPU: {gpu_name} ({gpu_total_gb:.1f} GB)")
     print(f"Precision: {'bf16' if use_bf16 else 'fp16'}")
     print(f"{'='*60}")
 
@@ -203,17 +259,28 @@ def train_on_colab(
         packing=False,
     )
 
-    # Train
+    steps_per_epoch = max(1, len(train_ds) // (batch_size * grad_accum))
+    total_steps = steps_per_epoch * epochs
+
     trainer = SFTTrainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
         processing_class=tokenizer,
+        callbacks=[ProgressCallback(total_steps)],
     )
 
+    print(f"Steps per epoch: {steps_per_epoch}  |  Total steps: {total_steps}")
     print("Starting training …")
-    trainer.train()
+    train_result = trainer.train()
+
+    print(f"\n{'='*60}")
+    print(f"  Training complete!")
+    print(f"  Runtime: {train_result.metrics.get('train_runtime', 0)/60:.1f} min")
+    print(f"  Samples/sec: {train_result.metrics.get('train_samples_per_second', 0):.2f}")
+    print(f"  Final loss: {train_result.metrics.get('train_loss', '—'):.4f}" if isinstance(train_result.metrics.get('train_loss'), float) else "  Final loss: —")
+    print(f"{'='*60}\n")
 
     # Save
     print(f"Saving adapter to {output_dir} …")
