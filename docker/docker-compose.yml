@@ -1,3 +1,5 @@
+name: legal-ai-agent
+
 services:
   api:
     build:
@@ -13,6 +15,13 @@ services:
       - minio
     volumes:
       - ../adapters:/app/adapters
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   mongo:
     image: mongo:7.0
