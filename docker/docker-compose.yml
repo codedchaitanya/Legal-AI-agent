@@ -15,13 +15,6 @@ services:
       - minio
     volumes:
       - ../adapters:/app/adapters
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
 
   mongo:
     image: mongo:7.0
@@ -44,10 +37,10 @@ services:
     image: postgres:16-alpine
     ports:
       - "5432:5432"
+    env_file: ../.env
     environment:
       POSTGRES_DB: legalai
       POSTGRES_USER: legalai
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
