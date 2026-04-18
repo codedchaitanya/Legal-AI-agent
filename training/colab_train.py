@@ -17,8 +17,8 @@ or uploaded and run as:
 # ============================================================
 INSTALL_DEPS = """
 !pip install -q torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-!pip install -q transformers==4.57.6 peft==0.17.1 trl==0.24.0 accelerate==1.10.1
-!pip install -q bitsandbytes==0.42.0 datasets sentencepiece pyyaml
+!pip install -q transformers peft trl accelerate
+!pip install -q bitsandbytes datasets sentencepiece pyyaml
 """
 
 # ============================================================
@@ -38,6 +38,14 @@ print(f"Files: {os.listdir('.')}")
 # ============================================================
 # CELL 3: Training function
 # ============================================================
+
+import time as _time
+
+
+def _log(msg: str):
+    ts = _time.strftime("%H:%M:%S")
+    print(f"[{ts}] {msg}", flush=True)
+
 
 def train_on_colab(
     domain: str = "criminal_violent",
@@ -71,28 +79,36 @@ def train_on_colab(
         base_model: HuggingFace model ID
     """
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    import trl
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainingArguments
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-    from trl import SFTTrainer, SFTConfig
+    from trl import SFTTrainer
     from datasets import Dataset
     import json
     from pathlib import Path
+
+    start_time = _time.time()
 
     if train_file is None:
         train_file = f"data/training/{domain}_train.jsonl"
     if output_dir is None:
         output_dir = f"adapters/{domain}"
 
-    print(f"{'='*60}")
-    print(f"Training adapter: {domain}")
-    print(f"Base model: {base_model}")
-    print(f"LoRA r={lora_r}, alpha={lora_alpha}")
-    print(f"Train file: {train_file}")
-    print(f"Output: {output_dir}")
-    print(f"GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
-    print(f"{'='*60}")
+    _log(f"{'='*60}")
+    _log(f"Training adapter: {domain}")
+    _log(f"Base model: {base_model}")
+    _log(f"LoRA r={lora_r}, alpha={lora_alpha}")
+    _log(f"Train file: {train_file}")
+    _log(f"Output: {output_dir}")
+    _log(f"trl version: {trl.__version__}")
+    _log(f"GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
+    if torch.cuda.is_available():
+        mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        _log(f"GPU memory: {mem:.1f} GB")
+    _log(f"{'='*60}")
 
-    # Quantization
+    # ── Step 1: Quantization config ──
+    _log("Step 1/7: Configuring 4-bit quantization …")
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
@@ -100,20 +116,25 @@ def train_on_colab(
         bnb_4bit_use_double_quant=True,
     )
 
-    # Tokenizer
-    print("Loading tokenizer …")
+    # ── Step 2: Tokenizer ──
+    _log("Step 2/7: Loading tokenizer …")
     tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    _log(f"  Vocab size: {len(tokenizer):,}")
 
-    # Model
-    print("Loading model with 4-bit quantization …")
+    # ── Step 3: Model ──
+    _log("Step 3/7: Loading base model (this takes a few minutes) …")
     model = AutoModelForCausalLM.from_pretrained(
         base_model, quantization_config=bnb_config, device_map="auto", trust_remote_code=True,
     )
     model = prepare_model_for_kbit_training(model)
+    if torch.cuda.is_available():
+        alloc = torch.cuda.memory_allocated() / 1024**3
+        _log(f"  GPU memory used after loading: {alloc:.1f} GB")
 
-    # LoRA
+    # ── Step 4: LoRA ──
+    _log("Step 4/7: Applying LoRA adapters …")
     peft_config = LoraConfig(
         r=lora_r, lora_alpha=lora_alpha, lora_dropout=0.05,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
@@ -121,17 +142,17 @@ def train_on_colab(
     )
     model = get_peft_model(model, peft_config)
     trainable, total = model.get_nb_trainable_parameters()
-    print(f"Trainable: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
+    _log(f"  Trainable: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
 
-    # Data
-    print("Loading data …")
+    # ── Step 5: Data ──
+    _log("Step 5/7: Loading training data …")
     train_items = []
     with open(train_file, encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 train_items.append(json.loads(line))
     train_ds = Dataset.from_list(train_items)
-    print(f"Train samples: {len(train_ds)}")
+    _log(f"  Train samples: {len(train_ds)}")
 
     eval_ds = None
     if eval_file and Path(eval_file).exists():
@@ -141,17 +162,22 @@ def train_on_colab(
                 if line.strip():
                     eval_items.append(json.loads(line))
         eval_ds = Dataset.from_list(eval_items)
-        print(f"Eval samples: {len(eval_ds)}")
+        _log(f"  Eval samples: {len(eval_ds)}")
 
-    # Training args (SFTConfig extends TrainingArguments with packing/max_seq_length)
-    training_args = SFTConfig(
+    total_steps = (len(train_ds) // (batch_size * grad_accum)) * epochs
+    _log(f"  Total training steps: ~{total_steps}")
+
+    # ── Step 6: Build trainer (version-agnostic) ──
+    _log("Step 6/7: Configuring trainer …")
+
+    common_args = dict(
         output_dir=output_dir,
         num_train_epochs=epochs,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=grad_accum,
         learning_rate=learning_rate,
         weight_decay=0.01,
-        warmup_ratio=0.03,
+        warmup_steps=max(1, int(total_steps * 0.03)),
         lr_scheduler_type="cosine",
         logging_steps=10,
         save_steps=100,
@@ -162,22 +188,39 @@ def train_on_colab(
         gradient_checkpointing=True,
         optim="paged_adamw_8bit",
         report_to="none",
-        packing=False,
-        max_seq_length=max_seq_length,
     )
 
-    # Train
-    trainer = SFTTrainer(
-        model=model, args=training_args,
-        train_dataset=train_ds, eval_dataset=eval_ds,
-        processing_class=tokenizer,
-    )
+    try:
+        from trl import SFTConfig
+        training_args = SFTConfig(**common_args, packing=False, max_seq_length=max_seq_length)
+        trainer = SFTTrainer(
+            model=model, args=training_args,
+            train_dataset=train_ds, eval_dataset=eval_ds,
+            processing_class=tokenizer,
+        )
+        _log("  Using SFTConfig (trl >= 0.12)")
+    except (ImportError, TypeError):
+        training_args = TrainingArguments(**common_args)
+        trainer = SFTTrainer(
+            model=model, args=training_args,
+            train_dataset=train_ds, eval_dataset=eval_ds,
+            processing_class=tokenizer,
+            packing=False,
+            max_seq_length=max_seq_length,
+        )
+        _log("  Using TrainingArguments + SFTTrainer kwargs (trl < 0.12)")
 
-    print("Starting training …")
+    # ── Step 7: Train ──
+    _log("Step 7/7: Starting training …")
+    _log(f"  Epochs: {epochs} | Batch: {batch_size} | Grad accum: {grad_accum} | LR: {learning_rate}")
     trainer.train()
 
-    # Save
-    print(f"Saving adapter to {output_dir} …")
+    elapsed = _time.time() - start_time
+    _log(f"Training finished in {elapsed/60:.1f} minutes")
+
+    # ── Save ──
+    _log(f"Saving adapter to {output_dir} …")
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
     model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
 
@@ -185,12 +228,13 @@ def train_on_colab(
         "adapter_name": domain, "base_model": base_model,
         "lora_r": lora_r, "lora_alpha": lora_alpha,
         "train_samples": len(train_ds), "epochs": epochs,
+        "training_time_minutes": round(elapsed / 60, 1),
     }
     with open(f"{output_dir}/adapter_metadata.json", "w") as f:
         json.dump(metadata, f, indent=2)
 
-    print(f"\nDone! Adapter saved to {output_dir}")
-    print(f"To use: copy {output_dir}/ to your server's adapters/ directory.")
+    _log(f"Done! Adapter saved to {output_dir}")
+    _log(f"To use: copy {output_dir}/ to your server's adapters/ directory.")
 
     return output_dir
 
