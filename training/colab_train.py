@@ -87,7 +87,7 @@ def train_on_colab(
     """
     import torch
     import time
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainerCallback, TrainerState, TrainerControl
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainerCallback, TrainerState, TrainerControl, PrinterCallback
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     from trl import SFTTrainer, SFTConfig
     from datasets import Dataset
@@ -99,6 +99,7 @@ def train_on_colab(
             self.total_steps = total_steps
             self.start_time = None
             self.epoch_start = None
+            self.current_epoch = 0
 
         def _gpu_mem(self) -> str:
             alloc = torch.cuda.memory_allocated() / 1e9
@@ -113,14 +114,13 @@ def train_on_colab(
             print(f"{'='*60}\n")
 
         def on_epoch_begin(self, args, state: TrainerState, control: TrainerControl, **kw):
+            self.current_epoch += 1
             self.epoch_start = time.time()
-            epoch = int(state.epoch) + 1
-            print(f"\n--- Epoch {epoch}/{args.num_train_epochs} started ---")
+            print(f"\n--- Epoch {self.current_epoch}/{args.num_train_epochs} started ---")
 
         def on_epoch_end(self, args, state: TrainerState, control: TrainerControl, **kw):
             elapsed = time.time() - self.epoch_start
-            epoch = int(state.epoch)
-            print(f"--- Epoch {epoch}/{args.num_train_epochs} done in {elapsed/60:.1f} min  |  GPU mem: {self._gpu_mem()} ---\n")
+            print(f"--- Epoch {self.current_epoch}/{args.num_train_epochs} done in {elapsed/60:.1f} min  |  GPU mem: {self._gpu_mem()} ---\n")
 
         def on_log(self, args, state: TrainerState, control: TrainerControl, logs=None, **kw):
             if not logs or state.global_step == 0:
@@ -203,6 +203,7 @@ def train_on_colab(
         device_map="auto",
         trust_remote_code=True,
     )
+    model.config.use_cache = False
     model = prepare_model_for_kbit_training(model)
 
     # LoRA
@@ -272,6 +273,7 @@ def train_on_colab(
         train_dataset=train_ds,
         eval_dataset=eval_ds,
         processing_class=tokenizer,
+        max_seq_length=max_seq_length,
         callbacks=[ProgressCallback(total_steps)],
     )
 
