@@ -334,9 +334,15 @@ def train_all_adapters(
     max_seq_length: int = 1024,
     early_stopping_patience: int = 3,
     base_model: str = "Qwen/Qwen2.5-7B-Instruct",
+    model=None,
+    tokenizer=None,
 ):
     """Train all domain adapters with a single model load — much faster than calling
-    train_on_colab() per domain, which reloads the 7B model each time."""
+    train_on_colab() per domain, which reloads the 7B model each time.
+
+    Pass ``model`` and ``tokenizer`` to reuse an already-loaded model and skip the
+    expensive load step (useful when calling this function multiple times in a session).
+    """
     import torch, time, json, os
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainerCallback, TrainerState, TrainerControl, PrinterCallback
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
@@ -363,27 +369,32 @@ def train_all_adapters(
     print(f"Domains: {', '.join(domains)}")
     print(f"{'='*60}\n")
 
-    # ── Load tokenizer + model ONCE ──────────────────────────
-    print("Loading tokenizer …")
-    tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    # ── Load tokenizer + model (skipped if passed in) ────────
+    if tokenizer is None:
+        print("Loading tokenizer …")
+        tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
     tokenizer.model_max_length = max_seq_length
 
-    print("Loading model with 4-bit quantization …")
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=compute_dtype,
-        bnb_4bit_use_double_quant=True,
-    )
-    base = AutoModelForCausalLM.from_pretrained(
-        base_model, quantization_config=bnb_config,
-        device_map="auto", trust_remote_code=True,
-    )
-    base.config.use_cache = False
-    base = prepare_model_for_kbit_training(base, use_gradient_checkpointing=True)
-    print("Model loaded. Starting domain loop …\n")
+    if model is None:
+        print("Loading model with 4-bit quantization …")
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=compute_dtype,
+            bnb_4bit_use_double_quant=True,
+        )
+        base = AutoModelForCausalLM.from_pretrained(
+            base_model, quantization_config=bnb_config,
+            device_map="auto", trust_remote_code=True,
+        )
+        base.config.use_cache = False
+        base = prepare_model_for_kbit_training(base, use_gradient_checkpointing=True)
+        print("Model loaded. Starting domain loop …\n")
+    else:
+        base = model
+        print("Using provided model. Starting domain loop …\n")
 
     total_start = time.time()
     results = {}
