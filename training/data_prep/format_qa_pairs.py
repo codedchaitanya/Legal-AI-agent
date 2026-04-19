@@ -80,32 +80,58 @@ SECTION_QUESTION_TEMPLATES = [
 
 
 def format_judgment_pair(judgment: dict, system_prompt: str) -> dict | None:
-    """Create a QA pair from a judgment."""
+    """Create a single QA pair from a judgment (legacy, uses 1 random template)."""
+    pairs = format_judgment_pairs_multi(judgment, system_prompt, num_pairs=1)
+    return pairs[0] if pairs else None
+
+
+def format_judgment_pairs_multi(judgment: dict, system_prompt: str, num_pairs: int = 1) -> list[dict]:
+    """Create multiple diverse QA pairs from a single judgment."""
     text = judgment.get("text", "")
     if not text or len(text) < 300:
-        return None
+        return []
 
-    # Truncate long judgments to fit in training context
     if len(text) > 6000:
         text = text[:6000] + "\n\n[Judgment text truncated for training.]"
 
-    question_template = random.choice(JUDGMENT_QUESTION_TEMPLATES)
     title = judgment.get("title", "this case")
-    question = f"Case: {title}\n\nJudgment excerpt:\n{text[:3000]}\n\n{question_template}"
+    doc_id = judgment.get("doc_id", "")
+    domain = judgment.get("domain", "")
 
-    # Use the latter part of the judgment as the answer (court's analysis)
-    analysis_start = len(text) // 2
-    answer_text = text[analysis_start:]
-    if len(answer_text) > 2000:
-        answer_text = answer_text[:2000]
+    templates = random.sample(JUDGMENT_QUESTION_TEMPLATES, min(num_pairs, len(JUDGMENT_QUESTION_TEMPLATES)))
 
-    formatted = CHAT_TEMPLATE.format(
-        system_prompt=system_prompt,
-        question=question,
-        answer=answer_text.strip(),
-    )
+    pairs = []
+    for i, template in enumerate(templates):
+        question = f"Case: {title}\n\nJudgment excerpt:\n{text[:3000]}\n\n{template}"
 
-    return {"text": formatted, "domain": judgment.get("domain", ""), "source": "judgment", "doc_id": judgment.get("doc_id", "")}
+        if i == 0:
+            analysis_start = len(text) // 2
+            answer_text = text[analysis_start:]
+        elif i == 1:
+            analysis_start = len(text) // 3
+            answer_text = text[analysis_start:analysis_start + 2500]
+        else:
+            analysis_start = max(0, len(text) - 2500)
+            answer_text = text[analysis_start:]
+
+        if len(answer_text) > 2000:
+            answer_text = answer_text[:2000]
+
+        formatted = CHAT_TEMPLATE.format(
+            system_prompt=system_prompt,
+            question=question,
+            answer=answer_text.strip(),
+        )
+
+        pairs.append({
+            "text": formatted,
+            "domain": domain,
+            "source": "judgment",
+            "doc_id": doc_id,
+            "pair_idx": i,
+        })
+
+    return pairs
 
 
 def format_section_pair(section: dict, system_prompt: str) -> dict | None:
@@ -135,19 +161,29 @@ def format_section_pair(section: dict, system_prompt: str) -> dict | None:
     return {"text": formatted, "domain": section.get("domain", ""), "source": "section", "section_number": sec_num}
 
 
-def process_judgments_file(input_path: Path, domain: str, output_path: Path) -> int:
-    """Process a judgment JSONL file into training pairs."""
+def process_judgments_file(input_path: Path, domain: str, output_path: Path, pairs_per_judgment: int = 1) -> int:
+    """Process a judgment JSONL file into training pairs.
+
+    Args:
+        pairs_per_judgment: Number of distinct QA pairs to generate per judgment.
+            Use >1 to amplify training data with diverse question angles.
+    """
     system_prompt = _load_system_prompt(domain)
     pairs = []
+    seen_doc_ids: set[str] = set()
 
     with open(input_path, encoding="utf-8") as f:
         for line in f:
             if not line.strip():
                 continue
             judgment = json.loads(line)
-            pair = format_judgment_pair(judgment, system_prompt)
-            if pair:
-                pairs.append(pair)
+            doc_id = judgment.get("doc_id", "")
+            if doc_id in seen_doc_ids:
+                continue
+            seen_doc_ids.add(doc_id)
+
+            new_pairs = format_judgment_pairs_multi(judgment, system_prompt, num_pairs=pairs_per_judgment)
+            pairs.extend(new_pairs)
 
     random.shuffle(pairs)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -155,7 +191,7 @@ def process_judgments_file(input_path: Path, domain: str, output_path: Path) -> 
         for p in pairs:
             f.write(json.dumps(p, ensure_ascii=False) + "\n")
 
-    logger.info("Created %d training pairs → %s", len(pairs), output_path)
+    logger.info("Created %d training pairs from %d unique judgments → %s", len(pairs), len(seen_doc_ids), output_path)
     return len(pairs)
 
 
@@ -190,6 +226,7 @@ def main():
     parser.add_argument("--format", choices=["judgments", "sections"], default="judgments")
     parser.add_argument("--domain", type=str, default="civil_general", help="Domain (for judgment files)")
     parser.add_argument("--output", required=True, help="Output JSONL path")
+    parser.add_argument("--pairs-per-judgment", type=int, default=1, help="QA pairs per judgment (>1 for data augmentation)")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -198,7 +235,7 @@ def main():
     if args.format == "sections":
         process_sections_file(Path(args.input), Path(args.output))
     else:
-        process_judgments_file(Path(args.input), args.domain, Path(args.output))
+        process_judgments_file(Path(args.input), args.domain, Path(args.output), pairs_per_judgment=args.pairs_per_judgment)
 
 
 if __name__ == "__main__":

@@ -12,15 +12,13 @@ ENV/
 dist/
 build/
 .eggs/
+.claude/
 
 # Env + secrets
 .env
 *.env.local
 
 # ML / data
-adapters/
-*.ckpt
-*.safetensors
 data/legal_db/
 
 # IDE
