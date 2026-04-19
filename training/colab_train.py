@@ -434,7 +434,7 @@ def train_all_adapters(
             weight_decay=0.01,
             warmup_ratio=0.03,
             lr_scheduler_type="cosine",
-            logging_steps=5,
+            logging_steps=1,          # log every step so early stopping is per-step
             save_steps=500,
             save_total_limit=1,
             bf16=use_bf16,
@@ -446,9 +446,10 @@ def train_all_adapters(
         )
 
         class _Cb(TrainerCallback):
-            def __init__(self, total, patience):
+            def __init__(self, total, patience, print_every=5):
                 self.total = total; self.t0 = None; self.ep = 0; self.ep_t = None
                 self.patience = patience
+                self.print_every = print_every
                 self.best_loss = float("inf")
                 self.bad_steps = 0
 
@@ -464,16 +465,9 @@ def train_all_adapters(
 
             def on_log(self, args, state, control, logs=None, **kw):
                 if not logs or state.global_step == 0: return
-                elapsed = time.time() - self.t0
-                pct = state.global_step / self.total
-                eta = (elapsed / pct - elapsed) if pct > 0 else 0
                 loss = logs.get("loss", None)
-                loss_s = f"{loss:.4f}" if isinstance(loss, float) else "—"
-                bar = "█" * int(20*pct) + "░" * (20 - int(20*pct))
-                alloc = torch.cuda.memory_allocated()/1e9
-                print(f"  [{bar}] {state.global_step}/{self.total} loss={loss_s} elapsed={elapsed/60:.1f}m ETA={eta/60:.1f}m GPU={alloc:.1f}GB")
 
-                # Early stopping — watch training loss
+                # Early stopping checked every step (logging_steps=1)
                 if isinstance(loss, float):
                     if loss < self.best_loss:
                         self.best_loss = loss
@@ -481,8 +475,20 @@ def train_all_adapters(
                     else:
                         self.bad_steps += 1
                         if self.bad_steps >= self.patience:
-                            print(f"  ⏹ Early stopping: loss hasn't improved for {self.patience} consecutive logs (best={self.best_loss:.4f})")
+                            print(f"  ⏹ Early stop step {state.global_step}: loss={loss:.4f} > best={self.best_loss:.4f}")
                             control.should_training_stop = True
+                            return
+
+                # Print progress every N steps to avoid spam
+                if state.global_step % self.print_every != 0:
+                    return
+                elapsed = time.time() - self.t0
+                pct = state.global_step / self.total
+                eta = (elapsed / pct - elapsed) if pct > 0 else 0
+                loss_s = f"{loss:.4f}" if isinstance(loss, float) else "—"
+                bar = "█" * int(20*pct) + "░" * (20 - int(20*pct))
+                alloc = torch.cuda.memory_allocated()/1e9
+                print(f"  [{bar}] {state.global_step}/{self.total} loss={loss_s} elapsed={elapsed/60:.1f}m ETA={eta/60:.1f}m GPU={alloc:.1f}GB")
 
         trainer = SFTTrainer(
             model=model, args=training_args,
