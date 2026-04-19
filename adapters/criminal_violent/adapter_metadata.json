@@ -1,0 +1,8 @@
+{
+  "adapter_name": "criminal_violent",
+  "base_model": "Qwen/Qwen2.5-7B-Instruct",
+  "lora_r": 32,
+  "lora_alpha": 64,
+  "train_samples": 570,
+  "epochs": 2
+}

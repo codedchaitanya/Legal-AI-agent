@@ -10,6 +10,10 @@ from db.postgres import init_db
 async def lifespan(app: FastAPI):
     await mongo.connect()
     await init_db()
+    # Preload all trained adapters into memory so first requests are fast
+    import asyncio
+    from core.reasoning.lora_engine import lora_engine
+    await asyncio.get_event_loop().run_in_executor(None, lora_engine.preload_all)
     yield
     await mongo.disconnect()
 
