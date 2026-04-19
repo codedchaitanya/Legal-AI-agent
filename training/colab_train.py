@@ -67,6 +67,8 @@ def train_on_colab(
     max_seq_length: int = 2048,
     output_dir: str | None = None,
     base_model: str = "Qwen/Qwen2.5-7B-Instruct",
+    no_quant: bool = False,
+    use_flash_attention: bool = False,
 ):
     """
     Train a QLoRA adapter on Colab.
@@ -76,7 +78,7 @@ def train_on_colab(
         train_file: Path to training JSONL
         eval_file: Path to eval JSONL (optional)
         epochs: Number of training epochs
-        batch_size: Per-device batch size (4 for T4, 8 for A100)
+        batch_size: Per-device batch size (4 for T4, 8+ for A100/H100)
         grad_accum: Gradient accumulation steps
         learning_rate: Learning rate
         lora_r: LoRA rank
@@ -84,6 +86,10 @@ def train_on_colab(
         max_seq_length: Max sequence length
         output_dir: Where to save the adapter
         base_model: HuggingFace model ID
+        no_quant: Load in bf16 without 4-bit quantization (needs ≥20 GB VRAM).
+                  Eliminates NF4 dequant overhead — 3-5x faster on A100/H100.
+        use_flash_attention: Enable Flash Attention 2 for faster attention.
+                             Requires: pip install flash-attn --no-build-isolation
     """
     import torch
     import time
@@ -163,12 +169,25 @@ def train_on_colab(
     os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
     torch.cuda.empty_cache()
 
-    # Pick precision based on hardware (T4 = fp16, A100 = bf16)
+    # Pick precision based on hardware (T4 = fp16, A100/Blackwell = bf16)
     use_bf16 = torch.cuda.is_bf16_supported()
     compute_dtype = torch.bfloat16 if use_bf16 else torch.float16
 
+    # TF32 speeds up matmuls on Ampere/Hopper/Blackwell at no accuracy cost
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
     gpu_name = torch.cuda.get_device_name(0)
     gpu_total_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+
+    # Auto-enable no_quant on large VRAM GPUs (≥20 GB) when not explicitly set
+    if not no_quant and gpu_total_gb >= 20:
+        no_quant = True
+        print(f"  Auto-enabled no_quant (GPU has {gpu_total_gb:.0f} GB VRAM — bf16 is faster)")
+
+    optim = "adamw_torch_fused" if no_quant else "paged_adamw_8bit"
+    use_grad_ckpt = not no_quant  # grad checkpointing wastes compute when VRAM is plentiful
+
     print(f"{'='*60}")
     print(f"Training adapter: {domain}")
     print(f"Base model: {base_model}")
@@ -176,16 +195,9 @@ def train_on_colab(
     print(f"Train file: {train_file}")
     print(f"Output: {output_dir}")
     print(f"GPU: {gpu_name} ({gpu_total_gb:.1f} GB)")
-    print(f"Precision: {'bf16' if use_bf16 else 'fp16'}")
+    print(f"Precision: {'bf16' if use_bf16 else 'fp16'}  |  quantization: {'none (bf16 full)' if no_quant else '4-bit NF4'}")
+    print(f"Flash Attention 2: {'yes' if use_flash_attention else 'no'}")
     print(f"{'='*60}")
-
-    # Quantization
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=compute_dtype,
-        bnb_4bit_use_double_quant=True,
-    )
 
     # Tokenizer
     print("Loading tokenizer …")
@@ -195,16 +207,35 @@ def train_on_colab(
     # In TRL 0.24, max sequence length is driven by the tokenizer, not SFTConfig.
     tokenizer.model_max_length = max_seq_length
 
-    # Model
-    print("Loading model with 4-bit quantization …")
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model,
-        quantization_config=bnb_config,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-    model.config.use_cache = False
-    model = prepare_model_for_kbit_training(model)
+    # Model — 4-bit NF4 or plain bf16
+    fa2_kwargs = {"attn_implementation": "flash_attention_2"} if use_flash_attention else {}
+    if no_quant:
+        print(f"Loading model in bf16 (no quantization) …")
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            torch_dtype=compute_dtype,
+            device_map="auto",
+            trust_remote_code=True,
+            **fa2_kwargs,
+        )
+        model.config.use_cache = False
+    else:
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=compute_dtype,
+            bnb_4bit_use_double_quant=True,
+        )
+        print("Loading model with 4-bit quantization …")
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            quantization_config=bnb_config,
+            device_map="auto",
+            trust_remote_code=True,
+            **fa2_kwargs,
+        )
+        model.config.use_cache = False
+        model = prepare_model_for_kbit_training(model)
 
     # LoRA
     peft_config = LoraConfig(
@@ -258,8 +289,8 @@ def train_on_colab(
         save_total_limit=2,
         bf16=use_bf16,
         fp16=not use_bf16,
-        gradient_checkpointing=True,
-        optim="paged_adamw_8bit",
+        gradient_checkpointing=use_grad_ckpt,
+        optim=optim,
         report_to="none",
         packing=False,
     )
@@ -336,12 +367,19 @@ def train_all_adapters(
     base_model: str = "Qwen/Qwen2.5-7B-Instruct",
     model=None,
     tokenizer=None,
+    no_quant: bool = False,
+    use_flash_attention: bool = False,
 ):
     """Train all domain adapters with a single model load — much faster than calling
     train_on_colab() per domain, which reloads the 7B model each time.
 
     Pass ``model`` and ``tokenizer`` to reuse an already-loaded model and skip the
     expensive load step (useful when calling this function multiple times in a session).
+
+    Speed tips for large VRAM GPUs (A100 40GB / H100 80GB / RTX PRO 6000):
+        no_quant=True          — bf16 without 4-bit (eliminates NF4 overhead, ~3-5x faster)
+        use_flash_attention=True — Flash Attention 2 (requires: pip install flash-attn)
+        batch_size=32, grad_accum=1  — fill GPU SMs fully
     """
     import torch, time, json, os
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainerCallback, TrainerState, TrainerControl, PrinterCallback
@@ -360,15 +398,31 @@ def train_all_adapters(
     os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
     torch.cuda.empty_cache()
 
+    # TF32 speeds up matmuls on Ampere/Hopper/Blackwell at no accuracy cost
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
     use_bf16 = torch.cuda.is_bf16_supported()
     compute_dtype = torch.bfloat16 if use_bf16 else torch.float16
     gpu_name = torch.cuda.get_device_name(0)
     gpu_total_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
 
+    # Auto-enable no_quant on large VRAM GPUs (≥20 GB) when not explicitly set
+    if not no_quant and gpu_total_gb >= 20:
+        no_quant = True
+        print(f"  Auto-enabled no_quant (GPU has {gpu_total_gb:.0f} GB VRAM — bf16 is faster)")
+
+    optim = "adamw_torch_fused" if no_quant else "paged_adamw_8bit"
+    use_grad_ckpt = not no_quant  # grad checkpointing wastes compute when VRAM is plentiful
+
     print(f"{'='*60}")
     print(f"Training {len(domains)} adapters on {gpu_name} ({gpu_total_gb:.1f} GB)")
     print(f"Domains: {', '.join(domains)}")
+    print(f"Quantization: {'none (bf16 full)' if no_quant else '4-bit NF4'}  |  Flash Attention 2: {'yes' if use_flash_attention else 'no'}")
+    print(f"Optimizer: {optim}  |  Grad checkpointing: {use_grad_ckpt}")
     print(f"{'='*60}\n")
+
+    fa2_kwargs = {"attn_implementation": "flash_attention_2"} if use_flash_attention else {}
 
     # ── Load tokenizer + model (skipped if passed in) ────────
     if tokenizer is None:
@@ -379,19 +433,27 @@ def train_all_adapters(
     tokenizer.model_max_length = max_seq_length
 
     if model is None:
-        print("Loading model with 4-bit quantization …")
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=compute_dtype,
-            bnb_4bit_use_double_quant=True,
-        )
-        base = AutoModelForCausalLM.from_pretrained(
-            base_model, quantization_config=bnb_config,
-            device_map="auto", trust_remote_code=True,
-        )
-        base.config.use_cache = False
-        base = prepare_model_for_kbit_training(base, use_gradient_checkpointing=True)
+        if no_quant:
+            print(f"Loading model in bf16 (no quantization) …")
+            base = AutoModelForCausalLM.from_pretrained(
+                base_model, torch_dtype=compute_dtype,
+                device_map="auto", trust_remote_code=True, **fa2_kwargs,
+            )
+            base.config.use_cache = False
+        else:
+            print("Loading model with 4-bit quantization …")
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=compute_dtype,
+                bnb_4bit_use_double_quant=True,
+            )
+            base = AutoModelForCausalLM.from_pretrained(
+                base_model, quantization_config=bnb_config,
+                device_map="auto", trust_remote_code=True, **fa2_kwargs,
+            )
+            base.config.use_cache = False
+            base = prepare_model_for_kbit_training(base, use_gradient_checkpointing=use_grad_ckpt)
         print("Model loaded. Starting domain loop …\n")
     else:
         base = model
@@ -451,8 +513,8 @@ def train_all_adapters(
             save_total_limit=1,
             bf16=use_bf16,
             fp16=not use_bf16,
-            gradient_checkpointing=True,
-            optim="paged_adamw_8bit",
+            gradient_checkpointing=use_grad_ckpt,
+            optim=optim,
             report_to="none",
             packing=False,
         )
