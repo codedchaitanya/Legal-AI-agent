@@ -357,6 +357,7 @@ def train_all_adapters(
         raise RuntimeError("No CUDA GPU detected.")
 
     os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
     torch.cuda.empty_cache()
 
     use_bf16 = torch.cuda.is_bf16_supported()

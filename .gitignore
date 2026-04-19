@@ -12,6 +12,7 @@ ENV/
 dist/
 build/
 .eggs/
+.claude/
 
 # Env + secrets
 .env
