@@ -82,7 +82,14 @@ DOMAIN_KEYWORDS = {
     "corporate_commercial": [
         "company law winding up", "NCLT insolvency IBC",
         "SEBI securities regulation", "arbitration commercial dispute",
-        "partnership dissolution",
+        "partnership dissolution", "oppression mismanagement Companies Act",
+        "corporate fraud section 447", "NCLAT appeal company",
+        "shareholder dispute board resolution", "merger acquisition NCLT",
+        "liquidation proceedings corporate", "director disqualification",
+        "debenture holder rights", "LLP limited liability partnership",
+        "Companies Act 2013 section", "commercial court arbitration award",
+        "joint venture agreement breach", "trademark infringement commercial",
+        "winding up petition creditor", "insolvency resolution CIRP",
     ],
     "labour_employment": [
         "industrial dispute retrenchment", "minimum wages violation",
@@ -263,7 +270,7 @@ def scrape_domain(
                     logger.info("    [%d/%d] %s", len(all_results), max_results, judgment["title"][:80])
 
             page += 1
-            if page > 5:  # don't go too deep in pagination
+            if page > 10:  # don't go too deep in pagination
                 break
 
     logger.info("Domain '%s': scraped %d judgments.", domain, len(all_results))
