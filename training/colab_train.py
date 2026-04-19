@@ -523,38 +523,53 @@ def train_all_adapters(
         class _Cb(TrainerCallback):
             def __init__(self, total, patience, print_every=5):
                 self.total = total; self.t0 = None; self.ep = 0; self.ep_t = None
-                self.patience = patience
+                self.patience = patience      # epochs without improvement (0 = disabled)
                 self.print_every = print_every
-                self.best_loss = float("inf")
-                self.bad_steps = 0
+                self.best_epoch_loss = float("inf")
+                self.bad_epochs = 0
+                self.epoch_loss_sum = 0.0
+                self.epoch_loss_steps = 0
+                self.step_losses: list[tuple[int, float]] = []   # (step, loss)
+                self.epoch_boundaries: list[int] = []            # steps where epochs end
 
             def on_train_begin(self, args, state, control, **kw):
                 self.t0 = time.time()
 
             def on_epoch_begin(self, args, state, control, **kw):
                 self.ep += 1; self.ep_t = time.time()
+                self.epoch_loss_sum = 0.0
+                self.epoch_loss_steps = 0
                 print(f"  Epoch {self.ep}/{args.num_train_epochs} started")
 
             def on_epoch_end(self, args, state, control, **kw):
-                print(f"  Epoch {self.ep}/{args.num_train_epochs} done in {(time.time()-self.ep_t)/60:.1f} min")
+                elapsed = time.time() - self.ep_t
+                avg_loss = self.epoch_loss_sum / self.epoch_loss_steps if self.epoch_loss_steps else float("inf")
+                self.epoch_boundaries.append(state.global_step)
+                print(f"  Epoch {self.ep}/{args.num_train_epochs} done in {elapsed/60:.1f} min  |  avg_loss={avg_loss:.4f}")
+
+                # Early stopping on epoch-average loss — immune to step-level noise
+                if self.patience > 0:
+                    if avg_loss < self.best_epoch_loss:
+                        self.best_epoch_loss = avg_loss
+                        self.bad_epochs = 0
+                    else:
+                        self.bad_epochs += 1
+                        print(f"  ⚠ No improvement for {self.bad_epochs}/{self.patience} epochs  (best={self.best_epoch_loss:.4f})")
+                        if self.bad_epochs >= self.patience:
+                            print(f"  ⏹ Early stop after epoch {self.ep}: avg_loss={avg_loss:.4f} > best={self.best_epoch_loss:.4f}")
+                            control.should_training_stop = True
 
             def on_log(self, args, state, control, logs=None, **kw):
                 if not logs or state.global_step == 0: return
                 loss = logs.get("loss", None)
 
-                # Early stopping checked every step (logging_steps=1)
+                # Accumulate for epoch-average and step-level plot
                 if isinstance(loss, float):
-                    if loss < self.best_loss:
-                        self.best_loss = loss
-                        self.bad_steps = 0
-                    else:
-                        self.bad_steps += 1
-                        if self.bad_steps >= self.patience:
-                            print(f"  ⏹ Early stop step {state.global_step}: loss={loss:.4f} > best={self.best_loss:.4f}")
-                            control.should_training_stop = True
-                            return
+                    self.epoch_loss_sum += loss
+                    self.epoch_loss_steps += 1
+                    self.step_losses.append((state.global_step, loss))
 
-                # Print progress every N steps to avoid spam
+                # Print progress every N steps
                 if state.global_step % self.print_every != 0:
                     return
                 elapsed = time.time() - self.t0
@@ -565,13 +580,51 @@ def train_all_adapters(
                 alloc = torch.cuda.memory_allocated()/1e9
                 print(f"  [{bar}] {state.global_step}/{self.total} loss={loss_s} elapsed={elapsed/60:.1f}m ETA={eta/60:.1f}m GPU={alloc:.1f}GB")
 
+        cb = _Cb(total_steps, early_stopping_patience)
         trainer = SFTTrainer(
             model=model, args=training_args,
             train_dataset=train_ds, processing_class=tokenizer,
-            max_seq_length=max_seq_length, callbacks=[_Cb(total_steps, early_stopping_patience)],
+            max_seq_length=max_seq_length, callbacks=[cb],
         )
         print(f"Steps/epoch: {steps_per_epoch}  |  Total: {total_steps}")
         result = trainer.train()
+
+        # ── Loss plot ─────────────────────────────────────────────────────────
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib.ticker as ticker
+
+            steps  = [s for s, _ in cb.step_losses]
+            losses = [l for _, l in cb.step_losses]
+
+            # Smooth with a rolling average (window = ~5% of total steps)
+            window = max(1, len(losses) // 20)
+            smooth = [sum(losses[max(0,i-window):i+1]) / len(losses[max(0,i-window):i+1])
+                      for i in range(len(losses))]
+
+            fig, ax = plt.subplots(figsize=(10, 4))
+            ax.plot(steps, losses, color="#aac4ff", linewidth=0.8, alpha=0.6, label="step loss")
+            ax.plot(steps, smooth, color="#2563eb", linewidth=2.0, label=f"smoothed (w={window})")
+
+            for ep_idx, boundary in enumerate(cb.epoch_boundaries, 1):
+                ax.axvline(boundary, color="#f97316", linewidth=1.2, linestyle="--", alpha=0.8)
+                ax.text(boundary + 0.5, ax.get_ylim()[1] * 0.97,
+                        f"ep{ep_idx}", color="#f97316", fontsize=8, va="top")
+
+            ax.set_xlabel("Step")
+            ax.set_ylabel("Loss")
+            ax.set_title(f"Training loss — {domain}  ({len(train_ds)} samples, {epochs} epochs)")
+            ax.legend(loc="upper right")
+            ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+            ax.grid(True, alpha=0.3)
+            fig.tight_layout()
+
+            plot_path = f"{output_dir}/loss_curve.png"
+            fig.savefig(plot_path, dpi=150)
+            plt.show()
+            print(f"  Loss curve saved → {plot_path}")
+        except Exception as e:
+            print(f"  (Plot skipped: {e})")
 
         # Save
         Path(output_dir).mkdir(parents=True, exist_ok=True)
