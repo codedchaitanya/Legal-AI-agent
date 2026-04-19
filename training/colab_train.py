@@ -396,6 +396,7 @@ def train_all_adapters(
 
     os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
     os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
     torch.cuda.empty_cache()
 
     # TF32 speeds up matmuls on Ampere/Hopper/Blackwell at no accuracy cost
