@@ -336,6 +336,7 @@ def train_all_adapters(
     base_model: str = "Qwen/Qwen2.5-7B-Instruct",
     model=None,
     tokenizer=None,
+    use_flash_attention: bool = False,
 ):
     """Train all domain adapters with a single model load — much faster than calling
     train_on_colab() per domain, which reloads the 7B model each time.
@@ -386,9 +387,10 @@ def train_all_adapters(
             bnb_4bit_compute_dtype=compute_dtype,
             bnb_4bit_use_double_quant=True,
         )
+        fa2_kwargs = {"attn_implementation": "flash_attention_2"} if use_flash_attention else {}
         base = AutoModelForCausalLM.from_pretrained(
             base_model, quantization_config=bnb_config,
-            device_map="auto", trust_remote_code=True,
+            device_map="auto", trust_remote_code=True, **fa2_kwargs,
         )
         base.config.use_cache = False
         base = prepare_model_for_kbit_training(base, use_gradient_checkpointing=True)
