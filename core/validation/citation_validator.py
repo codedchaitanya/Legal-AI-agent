@@ -12,6 +12,8 @@ CITATION_PATTERNS = [
     r"Section\s+\d+[A-Z]?\s+of\s+the\s+\w+",
     r"Article\s+\d+[A-Z]?",
     r"Order\s+[IVXLC0-9]+\s+Rule\s+\d+",
+    r"u/s\s+\d+[A-Z]?(?:/\d+[A-Z]?)?\s+\w+",
+    r"(?:under\s+)?[Ss]ection\s+\d+[A-Z]?(?:/\d+[A-Z]?)?\s+(?:IPC|BNS|CrPC|BNSS|BSA)",
 ]
 _PATTERN = re.compile("|".join(CITATION_PATTERNS), re.IGNORECASE)
 
