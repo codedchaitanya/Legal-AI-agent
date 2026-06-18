@@ -16,11 +16,19 @@ except ImportError:
 
 from core.config import settings
 
+ALL_DOMAINS = [
+    "criminal_violent", "criminal_property", "kidnapping_trafficking",
+    "sexual_offences", "land_property", "family_matrimonial",
+    "constitutional", "corporate_commercial", "labour_employment",
+    "cyber_digital", "tax_fiscal", "civil_general",
+]
+
 
 class LoRAEngine:
     """
     Manages a single base model instance with hot-swappable LoRA adapters.
-    Adapters are loaded lazily on first use and kept in memory.
+    All available adapters are preloaded into RAM at startup so first-request
+    latency is eliminated. Adapters stay in PEFT memory and are swapped in <1ms.
     """
 
     def __init__(self):
@@ -46,6 +54,7 @@ class LoRAEngine:
             quantization_config=bnb_config,
             device_map="auto",
         )
+        self._model.config.use_cache = False
         print("Base model loaded.")
 
     def load_adapter(self, adapter_name: str):
@@ -66,6 +75,24 @@ class LoRAEngine:
 
         self._loaded_adapters.add(adapter_name)
         print(f"Adapter loaded: {adapter_name}")
+
+    def preload_all(self):
+        """Load all available adapters into memory at startup.
+        Skips adapters whose files don't exist yet (not trained)."""
+        self._load_base_model()
+        adapters_dir = Path(settings.ADAPTERS_DIR)
+        loaded, skipped = [], []
+        for domain in ALL_DOMAINS:
+            if (adapters_dir / domain).exists():
+                try:
+                    self.load_adapter(domain)
+                    loaded.append(domain)
+                except Exception as e:
+                    print(f"  Warning: failed to preload {domain}: {e}")
+                    skipped.append(domain)
+            else:
+                skipped.append(domain)
+        print(f"Preloaded {len(loaded)} adapters. Skipped: {skipped or 'none'}")
 
     def _set_active_adapters(self, adapter_names: list[str]):
         self._model.set_adapter(adapter_names)
